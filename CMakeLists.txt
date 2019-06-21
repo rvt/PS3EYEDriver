@@ -32,6 +32,7 @@ if(libusb_FOUND)
         "urb.cpp"
         "queue.cpp"
         "mgr.cpp"
+        "accessors.cpp"
     )
 endif()
 

@@ -15,8 +15,10 @@ struct context
         if (hasDevices())
         {
             eye = devices[0];
-            eye->init(width, height, (uint16_t)fps);
+            running = eye->init(width, height, (uint16_t)fps);
         }
+        else
+            running = false;
     }
 
     bool hasDevices() { return (devices.size() > 0); }
@@ -39,12 +41,12 @@ static void print_renderer_info(SDL_Renderer* renderer)
 static void run_camera(int width, int height, int fps, Uint32 duration)
 {
     context ctx(width, height, fps);
-    if (!ctx.hasDevices())
+    if (!ctx.running)
     {
         printf("No PS3 Eye camera connected\n");
         return;
     }
-    ctx.eye->set_flip_status(true); /* mirrored left-right */
+    //ctx.eye->set_flip_status(true); /* mirrored left-right */
 
     char title[256];
     sprintf(title, "%dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
@@ -79,12 +81,11 @@ static void run_camera(int width, int height, int fps, Uint32 duration)
         return;
     }
 
-    ctx.eye->start();
+    ctx.running &= ctx.eye->start();
 
     printf("Camera mode: %dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
 
     SDL_Event e;
-
     Uint32 start_ticks = SDL_GetTicks();
     while (ctx.running)
     {

@@ -1,70 +1,79 @@
+#undef NDEBUG
+#include <cassert>
+
 #include "mgr.hpp"
 #include "internal.hpp"
 #include "ps3eye.hpp"
 
-#include <functional>
 #include <libusb.h>
 
-namespace ps3eye {
+namespace ps3eye::detail {
 
-USBMgr::USBMgr()
+enum {
+    vendor_id = 0x1415,
+    product_id = 0x2000,
+};
+
+usb_manager::usb_manager()
 {
-    exit_signaled = false;
-    active_camera_count = 0;
     libusb_init(&usb_context);
     libusb_set_option(usb_context, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
 }
 
-USBMgr::~USBMgr()
+usb_manager::~usb_manager()
 {
-    ps3eye_debug("USBMgr destructor\n");
+    ps3eye_debug("usb_manager destructor\n");
+    if (update_thread.joinable())
+        stop_xfer_thread();
     libusb_exit(usb_context);
 }
 
-USBMgr& USBMgr::instance()
+usb_manager& usb_manager::instance()
 {
-    static USBMgr ret;
-    return std::ref(ret);
+    static usb_manager ret;
+    return ret;
 }
 
-void USBMgr::cameraStarted()
+void usb_manager::camera_started()
 {
-    if (active_camera_count++ == 0) startTransferThread();
+    assert(usb_context);
+
+    if (active_camera_count.fetch_add(1, std::memory_order_relaxed) == 0)
+        start_xfer_thread();
 }
 
-void USBMgr::cameraStopped()
+void usb_manager::camera_stopped()
 {
-    if (--active_camera_count == 0) stopTransferThread();
+    if (active_camera_count.fetch_sub(1, std::memory_order_relaxed) == 1)
+        stop_xfer_thread();
 }
 
-void USBMgr::startTransferThread()
+void usb_manager::start_xfer_thread()
 {
-    update_thread = std::thread(&USBMgr::transferThreadFunc, this);
+    update_thread = std::thread(&usb_manager::xfer_callback, this);
 }
 
-void USBMgr::stopTransferThread()
+void usb_manager::stop_xfer_thread()
 {
     exit_signaled = true;
     update_thread.join();
     // Reset the exit signal flag.
-    // If we don't and we call startTransferThread() again, transferThreadFunc
+    // If we don't and we call start_xfer_thread() again, xfer_callback
     // will exit immediately.
     exit_signaled = false;
 }
 
-void USBMgr::transferThreadFunc()
+void usb_manager::xfer_callback()
 {
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 50 * 1000; // ms
+    tv.tv_usec = 30 * 1000; // ms
 
-    while (!exit_signaled)
-    {
+    while (!(exit_signaled.load(std::memory_order_relaxed)))
         libusb_handle_events_timeout_completed(usb_context, &tv, nullptr);
-    }
 }
 
-std::vector<std::shared_ptr<camera>> USBMgr::list_devices()
+std::vector<std::shared_ptr<camera>> usb_manager::list_devices()
 {
     std::vector<std::shared_ptr<camera>> list;
 
@@ -86,7 +95,7 @@ std::vector<std::shared_ptr<camera>> USBMgr::list_devices()
     {
         struct libusb_device_descriptor desc;
         libusb_get_device_descriptor(dev, &desc);
-        if (desc.idVendor == VENDOR_ID && desc.idProduct == PRODUCT_ID)
+        if (desc.idVendor == vendor_id && desc.idProduct == product_id)
         {
             int err = libusb_open(dev, &devhandle);
             if (err == 0)
@@ -104,4 +113,4 @@ std::vector<std::shared_ptr<camera>> USBMgr::list_devices()
     return list;
 }
 
-} // ns ps3eye
+} // ns ps3eye::detail

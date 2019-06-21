@@ -5,35 +5,37 @@
 #include <atomic>
 
 struct libusb_context;
+struct libusb_device;
+struct libusb_device_handle;
 
-namespace ps3eye {
+namespace ps3eye::detail {
 
 struct camera;
 
-struct USBMgr
+struct usb_manager
 {
-    USBMgr();
-    ~USBMgr();
+    usb_manager();
+    ~usb_manager();
 
-    static USBMgr& instance();
+    static usb_manager& instance();
     std::vector<std::shared_ptr<camera>> list_devices();
-    void cameraStarted();
-    void cameraStopped();
+    void camera_started();
+    void camera_stopped();
 
 private:
-    libusb_context* usb_context;
+    libusb_context* usb_context = nullptr;
     std::thread update_thread;
-    std::atomic_int active_camera_count;
-    std::atomic_bool exit_signaled;
+    std::atomic_int active_camera_count = 0;
+    std::atomic_bool exit_signaled = false;
 
-    USBMgr(const USBMgr&);
-    void operator=(const USBMgr&);
+    usb_manager(const usb_manager&);
+    void operator=(const usb_manager&);
 
-    void startTransferThread();
-    void stopTransferThread();
-    void transferThreadFunc();
+    void start_xfer_thread();
+    void stop_xfer_thread();
+    void xfer_callback();
 
     //int sTotalDevices = 0;
 };
 
-} // ns ps3eye
+} // ns ps3eye::detail

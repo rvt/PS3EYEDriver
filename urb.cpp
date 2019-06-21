@@ -3,8 +3,22 @@
 
 #include <algorithm>
 #include <optional>
+#include <libusb.h>
 
-namespace ps3eye {
+namespace ps3eye::detail {
+
+/* Values for bmHeaderInfo = (Video and Still Image Payload Headers, 2.4.3.3) */
+enum {
+    UVC_STREAM_EOH = 1 << 7,
+    UVC_STREAM_ERR = 1 << 6,
+    UVC_STREAM_STI = 1 << 5,
+    UVC_STREAM_RES = 1 << 4,
+    UVC_STREAM_SCR = 1 << 3,
+    UVC_STREAM_PTS = 1 << 2,
+    UVC_STREAM_EOF = 1 << 1,
+    UVC_STREAM_FID = 1 << 0,
+};
+
 urb_descriptor::urb_descriptor() = default;
 
 static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
@@ -16,7 +30,7 @@ static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
     {
         ps3eye_debug("transfer status %d\n", status);
 
-        urb->transfer_canceled();
+        urb->transfer_cancelled();
 
         if (status != LIBUSB_TRANSFER_CANCELLED)
         {
@@ -96,16 +110,15 @@ bool urb_descriptor::start_transfers(libusb_device_handle* handle, uint32_t fram
     libusb_clear_halt(handle, bulk_endpoint);
 
     // Allocate the transfer buffer
-    memset(transfer_buffer.data(), 0, TRANSFER_SIZE * NUM_TRANSFERS);
+    memset(transfer_buffer.data(), 0, transfer_size * num_transfers);
 
     int res = 0;
-    for (int index = 0; index < NUM_TRANSFERS; ++index)
+    for (int index = 0; index < num_transfers; ++index)
     {
         // Create & submit the transfer
         xfr[index] = libusb_alloc_transfer(0);
         libusb_fill_bulk_transfer(xfr[index], handle, bulk_endpoint,
-                                  transfer_buffer.data() + index * TRANSFER_SIZE,
-                                  TRANSFER_SIZE, transfer_completed_callback,
+                                  transfer_buffer.data() + index * transfer_size, transfer_size, transfer_completed_callback,
                                   reinterpret_cast<void*>(this), 0);
 
         res |= libusb_submit_transfer(xfr[index]);
@@ -116,7 +129,7 @@ bool urb_descriptor::start_transfers(libusb_device_handle* handle, uint32_t fram
     last_pts = 0;
     last_fid = 0;
 
-    USBMgr::instance().cameraStarted();
+    usb_manager::instance().camera_started();
 
     return res == 0;
 }
@@ -127,7 +140,7 @@ void urb_descriptor::close_transfers()
     if (num_active_transfers == 0) return;
 
     // Cancel any pending transfers
-    for (int index = 0; index < NUM_TRANSFERS; ++index)
+    for (int index = 0; index < num_transfers; ++index)
     {
         libusb_cancel_transfer(xfr[index]);
     }
@@ -138,16 +151,16 @@ void urb_descriptor::close_transfers()
     });
 
     // Free completed transfers
-    for (int index = 0; index < NUM_TRANSFERS; ++index)
+    for (int index = 0; index < num_transfers; ++index)
     {
         libusb_free_transfer(xfr[index]);
         xfr[index] = nullptr;
     }
 
-    USBMgr::instance().cameraStopped();
+    usb_manager::instance().camera_stopped();
 }
 
-void urb_descriptor::transfer_canceled()
+void urb_descriptor::transfer_cancelled()
 {
     std::lock_guard<std::mutex> lock(num_active_transfers_mutex);
     --num_active_transfers;
@@ -282,6 +295,12 @@ scan_next:
         remaining_len -= len;
         data += len;
     } while (remaining_len > 0);
+}
+
+urb_descriptor::~urb_descriptor()
+{
+    ps3eye_debug("urb_descriptor destructor\n");
+    close_transfers();
 }
 
 } // namespace ps3eye

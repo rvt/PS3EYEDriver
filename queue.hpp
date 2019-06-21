@@ -9,7 +9,7 @@
 #include <array>
 #include <cstring>
 
-namespace ps3eye {
+namespace ps3eye::detail {
 
 struct frame_queue final
 {
@@ -27,6 +27,7 @@ struct frame_queue final
 
 private:
     static constexpr unsigned max_frame_size = 640*480;
+    static constexpr unsigned max_buffered_frames = 5;
 
     std::mutex mutex_;
     std::condition_variable notify_frame_;
@@ -38,4 +39,4 @@ private:
     unsigned available_ = 0;
 };
 
-} // ns ps3eye
+} // ns ps3eye::detail

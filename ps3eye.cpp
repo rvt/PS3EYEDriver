@@ -21,8 +21,7 @@
 
 #include <libusb.h>
 
-namespace ps3eye
-{
+namespace ps3eye::detail {
 
 using namespace std::chrono_literals;
 
@@ -190,9 +189,8 @@ static const uint8_t sensor_start_qvga[][2] = {
     { 0x65, 0x2f },
 };
 
-camera::camera(libusb_device* device)
+camera::camera(libusb_device* device) : device_(device)
 {
-    device_ = device;
 }
 
 camera::~camera()
@@ -203,7 +201,8 @@ camera::~camera()
 
 void camera::release()
 {
-    if (handle_) close_usb();
+    if (handle_)
+        close_usb();
 }
 
 bool camera::init(int width, int height, int framerate, format fmt)
@@ -220,17 +219,16 @@ bool camera::init(int width, int height, int framerate, format fmt)
     // find best cam mode
     if ((width == 0 && height == 0) || width > 320 || height > 240)
     {
-        frame_width = 640;
-        frame_height = 480;
+        width_ = 640;
+        height_ = 480;
     }
     else
     {
-        frame_width = 320;
-        frame_height = 240;
+        width_ = 320;
+        height_ = 240;
     }
-    frame_rate = ov534_set_frame_rate(framerate, true);
-    frame_output_format = fmt;
-    //
+    frame_rate_ = ov534_set_frame_rate(framerate, true);
+    format_ = fmt;
 
     /* reset bridge */
     ov534_reg_write(0xe7, 0x3a);
@@ -263,12 +261,12 @@ bool camera::init(int width, int height, int framerate, format fmt)
     return true;
 }
 
-void camera::start()
+bool camera::start()
 {
-    if (streaming_)
-        return;
+    if (!is_initialized() || streaming_)
+        return false;
 
-    if (frame_width == 320)
+    if (width_ == 320)
     { /* 320x240 */
         reg_w_array(bridge_start_qvga, std::size(bridge_start_qvga));
         sccb_w_array(sensor_start_qvga, std::size(sensor_start_qvga));
@@ -279,7 +277,7 @@ void camera::start()
         sccb_w_array(sensor_start_vga, std::size(sensor_start_vga));
     }
 
-    ov534_set_frame_rate(frame_rate);
+    ov534_set_frame_rate(frame_rate_);
 
     set_auto_gain(auto_gain_);
     set_awb(awb_);
@@ -298,8 +296,10 @@ void camera::start()
     ov534_reg_write(0xe0, 0x00); // start stream
 
     // init and start urb
-    urb.start_transfers(handle_, frame_width * frame_height);
+    urb.start_transfers(handle_, width_ * height_);
     streaming_ = true;
+
+    return true;
 }
 
 void camera::stop()
@@ -363,20 +363,20 @@ bool camera::usb_port(char* buf, unsigned sz) const
 
 int camera::bytes_per_pixel() const
 {
-    if (frame_output_format == format::Bayer)
+    if (format_ == format::Bayer)
         return 1;
-    else if (frame_output_format == format::BGR)
+    else if (format_ == format::BGR)
         return 3;
-    else if (frame_output_format == format::RGB)
+    else if (format_ == format::RGB)
         return 3;
-    else if (frame_output_format == format::Gray)
+    else if (format_ == format::Gray)
         return 1;
     return 0;
 }
 
 bool camera::get_frame(uint8_t* frame)
 {
-    return urb.queue.dequeue(frame, frame_width, frame_height, frame_output_format);
+    return urb.queue.dequeue(frame, width_, height_, format_);
 }
 
 bool camera::open_usb()
@@ -505,7 +505,7 @@ int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
 
     int i;
 
-    if (frame_width == 640)
+    if (width_ == 640)
     {
         r = rate_0;
         i = std::size(rate_0);
@@ -649,152 +649,12 @@ void camera::sccb_w_array(const uint8_t (*data)[2], int len)
 
 std::vector<std::shared_ptr<camera>> camera::list_devices()
 {
-#if 0
-    if (enumerated && (!forceRefresh)) return devices;
-
-    devices.clear();
-
-    //USBMgr::instance()->sTotalDevices =
-    devices = USBMgr::instance()->list_devices();
-
-    enumerated = true;
-    return devices;
-#else
-    return USBMgr::instance().list_devices();
-#endif
+    return usb_manager::instance().list_devices();
 }
 
-void camera::set_auto_gain(bool val)
+constexpr bool camera::is_initialized() const
 {
-    auto_gain_ = val;
-    if (val)
-    {
-        sccb_reg_write(0x13, 0xf7); // AGC,AEC,AWB ON
-        sccb_reg_write(0x64, sccb_reg_read(0x64) | 0x03);
-    }
-    else
-    {
-        sccb_reg_write(0x13, 0xf0); // AGC,AEC,AWB OFF
-        sccb_reg_write(0x64, sccb_reg_read(0x64) & 0xFC);
-
-        set_gain(gain_);
-        set_exposure(exposure_);
-    }
-}
-
-void camera::set_awb(bool val)
-{
-    awb_ = val;
-    if (val)
-    {
-        sccb_reg_write(0x63, 0xe0); // AWB ON
-    }
-    else
-    {
-        sccb_reg_write(0x63, 0xAA); // AWB OFF
-    }
-}
-
-bool camera::set_framerate(int val)
-{
-    if (streaming_) return false;
-    frame_rate = ov534_set_frame_rate((uint8_t)std::clamp(val, 0, 512), true);
-    return true;
-}
-
-void camera::set_test_pattern_status(bool enable)
-{
-    test_pattern_ = enable;
-    uint8_t val = sccb_reg_read(0x0C);
-    val &= ~0b00000001;
-    if (test_pattern_) val |= 0b00000001; // 0x80;
-    sccb_reg_write(0x0C, val);
-}
-
-void camera::set_exposure(int val)
-{
-    exposure_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x08, exposure_ >> 7);
-    sccb_reg_write(0x10, uint8_t(exposure_ << 1));
-}
-
-void camera::set_sharpness(int val)
-{
-    sharpness_ = (uint8_t)std::clamp(val, 0, 63);
-    sccb_reg_write(0x91, sharpness_); // vga noise
-    sccb_reg_write(0x8E, sharpness_); // qvga noise
-}
-
-void camera::set_contrast(int val)
-{
-    contrast_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x9C, contrast_);
-}
-
-void camera::set_brightness(int val)
-{
-    brightness_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x9B, brightness_);
-}
-
-void camera::set_hue(int val)
-{
-    hue_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x01, hue_);
-}
-
-void camera::set_red_balance(int val)
-{
-    redblc_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x43, redblc_);
-}
-
-void camera::set_blue_balance(int val)
-{
-    blueblc_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x42, blueblc_);
-}
-
-void camera::set_green_balance(int val)
-{
-    greenblc_ = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x44, greenblc_);
-}
-
-void camera::set_flip_status(bool horizontal, bool vertical)
-{
-    flip_h_ = horizontal;
-    flip_v_ = vertical;
-    uint8_t val = sccb_reg_read(0x0c);
-    val &= ~0xc0;
-    if (!horizontal) val |= 0x40;
-    if (!vertical) val |= 0x80;
-    sccb_reg_write(0x0c, val);
-}
-
-void camera::set_gain(int val)
-{
-    gain_ = (uint8_t)std::clamp(val, 0, 63);
-    val = gain_;
-    switch (val & 0x30)
-    {
-    case 0x00:
-        val &= 0x0F;
-        break;
-    case 0x10:
-        val &= 0x0F;
-        val |= 0x30;
-        break;
-    case 0x20:
-        val &= 0x0F;
-        val |= 0x70;
-        break;
-    case 0x30:
-        val &= 0x0F;
-        val |= 0xF0;
-        break;
-    }
-    sccb_reg_write(0x00, (uint8_t)val);
+    return device_ && handle_ && width_ && height_;
 }
 
 } // namespace ps3eye

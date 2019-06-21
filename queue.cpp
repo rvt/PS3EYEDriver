@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cassert>
 
-namespace ps3eye {
+namespace ps3eye::detail {
 
 void frame_queue::init(unsigned frame_size)
 {
@@ -343,4 +343,4 @@ bool frame_queue::dequeue(uint8_t* dest, int W, int H, format fmt)
     return true;
 }
 
-} // ns ps3eye
+} // ns ps3eye::detail

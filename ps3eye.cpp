@@ -1,18 +1,8 @@
 // source code from https://github.com/inspirit/PS3EYEDriver
 #include "ps3eye.h"
-
-// Get rid of annoying zero length structure warnings from libusb.h in MSVC
-
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4200)
-#endif
-
-#include "libusb.h"
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
+#include "urb.hpp"
+#include "mgr.hpp"
+#include "internal.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -20,97 +10,30 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#if defined WIN32 || defined _WIN32 || defined WINCE
 #include <algorithm>
-#include <windows.h>
-
-#ifdef __MINGW32__
-void SetThreadName(const char* threadName)
-{
-    // Not sure how to implement this on mingw
-}
-#else
-const DWORD MS_VC_EXCEPTION = 0x406D1388;
-
-#pragma pack(push, 8)
-typedef struct tagTHREADNAME_INFO
-{
-    DWORD dwType;     // Must be 0x1000.
-    LPCSTR szName;    // Pointer to name (in user addr space).
-    DWORD dwThreadID; // Thread ID (-1=caller thread).
-    DWORD dwFlags;    // Reserved for future use, must be zero.
-} THREADNAME_INFO;
-#pragma pack(pop)
-
-void SetThreadName(uint32_t thread_id, const char* thread_name)
-{
-    THREADNAME_INFO info;
-    info.dwType = 0x1000;
-    info.szName = thread_name;
-    info.dwThreadID = thread_id;
-    info.dwFlags = 0;
-
-    __try
-    {
-        RaiseException(MS_VC_EXCEPTION, 0, sizeof(info) / sizeof(ULONG_PTR),
-                       (ULONG_PTR*)&info);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-    }
-}
-
-void SetThreadName(const char* thread_name)
-{
-    SetThreadName(GetCurrentThreadId(), thread_name);
-}
-#endif
-
-#else
-#include <sys/time.h>
-#include <time.h>
-#if defined __MACH__ && defined __APPLE__
-#include <mach/mach.h>
-#include <mach/mach_time.h>
-#endif
-
-void SetThreadName(const char* threadName)
-{
-    // Not sure how to implement this on linux/osx, so left empty...
-}
-#endif
+#include <iterator>
 
 #ifdef _MSC_VER
-#pragma warning(disable : 4996) // 'This function or variable may be unsafe': snprintf
-#define snprintf _snprintf
+#   pragma warning(disable : 4200) // zero-length arrays
+#   pragma warning(disable : 4996) // 'This function or variable may be unsafe': snprintf
 #endif
 
-#if defined(DEBUG) && 0
-#define debug(...) fprintf(stdout, __VA_ARGS__)
-#else
-#define debug(...)
-#endif
+#include <libusb.h>
 
 namespace ps3eye
 {
-#define TRANSFER_SIZE 65536
-#define NUM_TRANSFERS 5
 
-#define OV534_REG_ADDRESS 0xf1 /* sensor address */
-#define OV534_REG_SUBADDR 0xf2
-#define OV534_REG_WRITE 0xf3
-#define OV534_REG_READ 0xf4
-#define OV534_REG_OPERATION 0xf5
-#define OV534_REG_STATUS 0xf6
-
-#define OV534_OP_WRITE_3 0x37
-#define OV534_OP_WRITE_2 0x33
-#define OV534_OP_READ_2 0xf9
-
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(_A) (sizeof(_A) / sizeof((_A)[0]))
-#endif
+enum : uint8_t {
+    OV534_REG_ADDRESS = 0xf1, /* sensor address */
+    OV534_REG_SUBADDR = 0xf2,
+    OV534_REG_WRITE = 0xf3,
+    OV534_REG_READ = 0xf4,
+    OV534_REG_OPERATION = 0xf5,
+    OV534_REG_STATUS = 0xf6,
+    OV534_OP_WRITE_3 = 0x37,
+    OV534_OP_WRITE_2 = 0x33,
+    OV534_OP_READ_2 = 0xf9,
+};
 
 static const uint8_t ov534_reg_initdata[][2] = {
     { 0xe7, 0x3a },
@@ -220,896 +143,11 @@ static const uint8_t sensor_start_qvga[][2] = {
     { 0x1a, 0x78 }, { 0x29, 0x50 }, { 0x2c, 0x78 }, { 0x65, 0x2f },
 };
 
-/* Values for bmHeaderInfo (Video and Still Image Payload Headers, 2.4.3.3) */
-#define UVC_STREAM_EOH (1 << 7)
-#define UVC_STREAM_ERR (1 << 6)
-#define UVC_STREAM_STI (1 << 5)
-#define UVC_STREAM_RES (1 << 4)
-#define UVC_STREAM_SCR (1 << 3)
-#define UVC_STREAM_PTS (1 << 2)
-#define UVC_STREAM_EOF (1 << 1)
-#define UVC_STREAM_FID (1 << 0)
-
-/* packet types when moving from iso buf to frame buf */
-enum gspca_packet_type
-{
-    DISCARD_PACKET,
-    FIRST_PACKET,
-    INTER_PACKET,
-    LAST_PACKET
-};
-
-/*
- * look for an input transfer endpoint in an alternate setting
- * libusb_endpoint_descriptor
- */
-static uint8_t find_ep(struct libusb_device* device)
-{
-    const struct libusb_interface_descriptor* altsetting = NULL;
-    const struct libusb_endpoint_descriptor* ep;
-    struct libusb_config_descriptor* config = NULL;
-    int i;
-    uint8_t ep_addr = 0;
-
-    libusb_get_active_config_descriptor(device, &config);
-
-    if (!config) return 0;
-
-    for (i = 0; i < config->bNumInterfaces; i++)
-    {
-        altsetting = config->interface[i].altsetting;
-        if (altsetting[0].bInterfaceNumber == 0)
-        {
-            break;
-        }
-    }
-
-    for (i = 0; i < altsetting->bNumEndpoints; i++)
-    {
-        ep = &altsetting->endpoint[i];
-        if ((ep->bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) == LIBUSB_TRANSFER_TYPE_BULK &&
-            ep->wMaxPacketSize != 0)
-        {
-            ep_addr = ep->bEndpointAddress;
-            break;
-        }
-    }
-
-    libusb_free_config_descriptor(config);
-
-    return ep_addr;
-}
-
-const uint16_t PS3EYECam::VENDOR_ID = 0x1415;
-const uint16_t PS3EYECam::PRODUCT_ID = 0x2000;
-
-class USBMgr
-{
-    public:
-    USBMgr();
-    ~USBMgr();
-
-    static std::shared_ptr<USBMgr> instance();
-    int listDevices(std::vector<PS3EYECam::PS3EYERef>& list);
-    void cameraStarted();
-    void cameraStopped();
-
-    static std::shared_ptr<USBMgr> sInstance;
-    static int sTotalDevices;
-
-    private:
-    libusb_context* usb_context;
-    std::thread update_thread;
-    std::atomic_bool exit_signaled;
-    std::atomic_int active_camera_count;
-
-    USBMgr(const USBMgr&);
-    void operator=(const USBMgr&);
-
-    void startTransferThread();
-    void stopTransferThread();
-    void transferThreadFunc();
-};
-
-std::shared_ptr<USBMgr> USBMgr::sInstance;
-int USBMgr::sTotalDevices = 0;
-
-USBMgr::USBMgr()
-{
-    exit_signaled = false;
-    active_camera_count = 0;
-    libusb_init(&usb_context);
-    libusb_set_debug(usb_context, 1);
-}
-
-USBMgr::~USBMgr()
-{
-    debug("USBMgr destructor\n");
-    libusb_exit(usb_context);
-}
-
-std::shared_ptr<USBMgr> USBMgr::instance()
-{
-    if (!sInstance)
-    {
-        sInstance = std::shared_ptr<USBMgr>(new USBMgr);
-    }
-    return sInstance;
-}
-
-void USBMgr::cameraStarted()
-{
-    if (active_camera_count++ == 0) startTransferThread();
-}
-
-void USBMgr::cameraStopped()
-{
-    if (--active_camera_count == 0) stopTransferThread();
-}
-
-void USBMgr::startTransferThread()
-{
-    update_thread = std::thread(&USBMgr::transferThreadFunc, this);
-}
-
-void USBMgr::stopTransferThread()
-{
-    exit_signaled = true;
-    update_thread.join();
-    // Reset the exit signal flag.
-    // If we don't and we call startTransferThread() again, transferThreadFunc
-    // will exit immediately.
-    exit_signaled = false;
-}
-
-void USBMgr::transferThreadFunc()
-{
-    SetThreadName("PS3EyeDriver Transfer Thread");
-
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 50 * 1000; // ms
-
-    while (!exit_signaled)
-    {
-        libusb_handle_events_timeout_completed(usb_context, &tv, NULL);
-    }
-}
-
-int USBMgr::listDevices(std::vector<PS3EYECam::PS3EYERef>& list)
-{
-    libusb_device* dev;
-    libusb_device** devs;
-    libusb_device_handle* devhandle;
-    int i = 0;
-    int cnt;
-
-    cnt = (int)libusb_get_device_list(usb_context, &devs);
-
-    if (cnt < 0)
-    {
-        debug("Error Device scan\n");
-    }
-
-    cnt = 0;
-    while ((dev = devs[i++]) != NULL)
-    {
-        struct libusb_device_descriptor desc;
-        libusb_get_device_descriptor(dev, &desc);
-        if (desc.idVendor == PS3EYECam::VENDOR_ID && desc.idProduct == PS3EYECam::PRODUCT_ID)
-        {
-            int err = libusb_open(dev, &devhandle);
-            if (err == 0)
-            {
-                libusb_close(devhandle);
-                list.push_back(PS3EYECam::PS3EYERef(new PS3EYECam(dev)));
-                libusb_ref_device(dev);
-                cnt++;
-            }
-        }
-    }
-
-    libusb_free_device_list(devs, 1);
-
-    return cnt;
-}
-
-void micStarted() { USBMgr::instance()->cameraStarted(); }
-
-void micStopped() { USBMgr::instance()->cameraStopped(); }
-
-static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr);
-
-class FrameQueue
-{
-    public:
-    FrameQueue(uint32_t frame_size)
-        : frame_size(frame_size),
-          num_frames(2),
-          frame_buffer((uint8_t*)malloc(frame_size * num_frames)),
-          head(0),
-          tail(0),
-          available(0)
-    {
-    }
-
-    ~FrameQueue() { free(frame_buffer); }
-
-    uint8_t* GetFrameBufferStart() { return frame_buffer; }
-
-    uint8_t* Enqueue()
-    {
-        uint8_t* new_frame = NULL;
-
-        std::lock_guard<std::mutex> lock(mutex);
-
-        // Unlike traditional producer/consumer, we don't block the producer if
-        // the buffer is full (ie. the consumer is not reading data fast
-        // enough). Instead, if the buffer is full, we simply return the current
-        // frame pointer, causing the producer to overwrite the previous frame.
-        // This allows performance to degrade gracefully: if the consumer is not
-        // fast enough (< Camera FPS), it will miss frames, but if it is fast
-        // enough (>= Camera FPS), it will see everything.
-        //
-        // Note that because the the producer is writing directly to the ring
-        // buffer, we can only ever be a maximum of num_frames-1 ahead of the
-        // consumer, otherwise the producer could overwrite the frame the
-        // consumer is currently reading (in case of a slow consumer)
-        if (available >= num_frames - 1)
-        {
-            return frame_buffer + head * frame_size;
-        }
-
-        // Note: we don't need to copy any data to the buffer since the USB
-        // packets are directly written to the frame buffer. We just need to
-        // update head and available count to signal to the consumer that a new
-        // frame is available
-        head = (head + 1) % num_frames;
-        available++;
-
-        // Determine the next frame pointer that the producer should write to
-        new_frame = frame_buffer + head * frame_size;
-
-        // Signal consumer that data became available
-        empty_condition.notify_one();
-
-        return new_frame;
-    }
-
-    void Dequeue(uint8_t* new_frame, int frame_width, int frame_height, PS3EYECam::EOutputFormat outputFormat)
-    {
-        std::unique_lock<std::mutex> lock(mutex);
-
-        // If there is no data in the buffer, wait until data becomes available
-        empty_condition.wait(lock, [this]() { return available != 0; });
-
-        // Copy from internal buffer
-        uint8_t* source = frame_buffer + frame_size * tail;
-
-        if (outputFormat == PS3EYECam::EOutputFormat::Bayer)
-        {
-            memcpy(new_frame, source, frame_size);
-        }
-        else if (outputFormat == PS3EYECam::EOutputFormat::BGR ||
-                 outputFormat == PS3EYECam::EOutputFormat::RGB)
-        {
-            DebayerRGB(frame_width, frame_height, source, new_frame,
-                       outputFormat == PS3EYECam::EOutputFormat::BGR);
-        }
-        else if (outputFormat == PS3EYECam::EOutputFormat::Gray)
-        {
-            DebayerGray(frame_width, frame_height, source, new_frame);
-        }
-        // Update tail and available count
-        tail = (tail + 1) % num_frames;
-        available--;
-    }
-
-    void DebayerGray(int frame_width, int frame_height, const uint8_t* inBayer, uint8_t* outBuffer)
-    {
-        // PSMove output is in the following Bayer format (GRBG):
-        //
-        // G R G R G R
-        // B G B G B G
-        // G R G R G R
-        // B G B G B G
-        //
-        // This is the normal Bayer pattern shifted left one place.
-
-        int source_stride = frame_width;
-        const uint8_t* source_row = inBayer; // Start at first bayer pixel
-        int dest_stride = frame_width;
-        uint8_t* dest_row = outBuffer + dest_stride + 1; // We start outputting
-                                                         // at the second pixel
-                                                         // of the second row's
-                                                         // G component
-        uint32_t R, G, B;
-
-        // Fill rows 1 to height-2 of the destination buffer. First and last row
-        // are filled separately (they are copied from the second row and
-        // second-to-last rows respectively)
-        for (int y = 0; y < frame_height - 2;
-             source_row += source_stride, dest_row += dest_stride, ++y)
-        {
-            const uint8_t* source = source_row;
-            const uint8_t* source_end =
-                source + (source_stride - 2); // -2 to deal with the fact that
-                                              // we're starting at the second
-                                              // pixel of the row and should end
-                                              // at the second-to-last pixel of
-                                              // the row (first and last are
-                                              // filled separately)
-            uint8_t* dest = dest_row;
-
-            // Row starting with Green
-            if (y % 2 == 0)
-            {
-                // Fill first pixel (green)
-                B = (source[source_stride] + source[source_stride + 2] + 1) >> 1;
-                G = source[source_stride + 1];
-                R = (source[1] + source[source_stride * 2 + 1] + 1) >> 1;
-                *dest = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-
-                source++;
-                dest++;
-
-                // Fill remaining pixel
-                for (; source <= source_end - 2; source += 2, dest += 2)
-                {
-                    // Blue pixel
-                    B = source[source_stride + 1];
-                    G = (source[1] + source[source_stride] + source[source_stride + 2] +
-                         source[source_stride * 2 + 1] + 2) >>
-                        2;
-                    R = (source[0] + source[2] + source[source_stride * 2] +
-                         source[source_stride * 2 + 2] + 2) >>
-                        2;
-                    dest[0] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-
-                    //  Green pixel
-                    B = (source[source_stride + 1] + source[source_stride + 3] + 1) >> 1;
-                    G = source[source_stride + 2];
-                    R = (source[2] + source[source_stride * 2 + 2] + 1) >> 1;
-                    dest[1] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-                }
-            }
-            else
-            {
-                for (; source <= source_end - 2; source += 2, dest += 2)
-                {
-                    // Red pixel
-                    B = (source[0] + source[2] + source[source_stride * 2] +
-                         source[source_stride * 2 + 2] + 2) >>
-                        2;
-                    ;
-                    G = (source[1] + source[source_stride] + source[source_stride + 2] +
-                         source[source_stride * 2 + 1] + 2) >>
-                        2;
-                    ;
-                    R = source[source_stride + 1];
-                    dest[0] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-
-                    // Green pixel
-                    B = (source[2] + source[source_stride * 2 + 2] + 1) >> 1;
-                    G = source[source_stride + 2];
-                    R = (source[source_stride + 1] + source[source_stride + 3] + 1) >> 1;
-                    dest[1] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-                }
-            }
-
-            if (source < source_end)
-            {
-                B = source[source_stride + 1];
-                G = (source[1] + source[source_stride] + source[source_stride + 2] +
-                     source[source_stride * 2 + 1] + 2) >>
-                    2;
-                R = (source[0] + source[2] + source[source_stride * 2] +
-                     source[source_stride * 2 + 2] + 2) >>
-                    2;
-                ;
-                dest[0] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
-
-                source++;
-                dest++;
-            }
-
-            // Fill first pixel of row (copy second pixel)
-            uint8_t* first_pixel = dest_row - 1;
-            first_pixel[0] = dest_row[0];
-
-            // Fill last pixel of row (copy second-to-last pixel). Note: dest row
-            // starts at the *second* pixel of the row, so dest_row + (width-2)
-            // * num_output_channels puts us at the last pixel of the row
-            uint8_t* last_pixel = dest_row + (frame_width - 2);
-            uint8_t* second_to_last_pixel = last_pixel - 1;
-            last_pixel[0] = second_to_last_pixel[0];
-        }
-
-        // Fill first & last row
-        for (int i = 0; i < dest_stride; i++)
-        {
-            outBuffer[i] = outBuffer[i + dest_stride];
-            outBuffer[i + (frame_height - 1) * dest_stride] =
-                outBuffer[i + (frame_height - 2) * dest_stride];
-        }
-    }
-
-    void DebayerRGB(int frame_width, int frame_height, const uint8_t* inBayer, uint8_t* outBuffer, bool inBGR)
-    {
-        // PSMove output is in the following Bayer format (GRBG):
-        //
-        // G R G R G R
-        // B G B G B G
-        // G R G R G R
-        // B G B G B G
-        //
-        // This is the normal Bayer pattern shifted left one place.
-
-        int num_output_channels = 3;
-        int source_stride = frame_width;
-        const uint8_t* source_row = inBayer; // Start at first bayer pixel
-        int dest_stride = frame_width * num_output_channels;
-        uint8_t* dest_row = outBuffer + dest_stride + num_output_channels +
-                            1; // We start outputting at the second pixel of the
-                               // second row's G component
-        int swap_br = inBGR ? 1 : -1;
-
-        // Fill rows 1 to height-2 of the destination buffer. First and last row
-        // are filled separately (they are copied from the second row and
-        // second-to-last rows respectively)
-        for (int y = 0; y < frame_height - 2;
-             source_row += source_stride, dest_row += dest_stride, ++y)
-        {
-            const uint8_t* source = source_row;
-            const uint8_t* source_end =
-                source + (source_stride - 2); // -2 to deal with the fact that
-                                              // we're starting at the second
-                                              // pixel of the row and should end
-                                              // at the second-to-last pixel of
-                                              // the row (first and last are
-                                              // filled separately)
-            uint8_t* dest = dest_row;
-
-            // Row starting with Green
-            if (y % 2 == 0)
-            {
-                // Fill first pixel (green)
-                dest[-1 * swap_br] =
-                    (source[source_stride] + source[source_stride + 2] + 1) >> 1;
-                dest[0] = source[source_stride + 1];
-                dest[1 * swap_br] = (source[1] + source[source_stride * 2 + 1] + 1) >> 1;
-
-                source++;
-                dest += num_output_channels;
-
-                // Fill remaining pixel
-                for (; source <= source_end - 2; source += 2, dest += num_output_channels * 2)
-                {
-                    // Blue pixel
-                    uint8_t* cur_pixel = dest;
-                    cur_pixel[-1 * swap_br] = source[source_stride + 1];
-                    cur_pixel[0] = (source[1] + source[source_stride] +
-                                    source[source_stride + 2] +
-                                    source[source_stride * 2 + 1] + 2) >>
-                                   2;
-                    cur_pixel[1 * swap_br] =
-                        (source[0] + source[2] + source[source_stride * 2] +
-                         source[source_stride * 2 + 2] + 2) >>
-                        2;
-
-                    //  Green pixel
-                    uint8_t* next_pixel = cur_pixel + num_output_channels;
-                    next_pixel[-1 * swap_br] =
-                        (source[source_stride + 1] + source[source_stride + 3] + 1) >> 1;
-                    next_pixel[0] = source[source_stride + 2];
-                    next_pixel[1 * swap_br] =
-                        (source[2] + source[source_stride * 2 + 2] + 1) >> 1;
-                }
-            }
-            else
-            {
-                for (; source <= source_end - 2; source += 2, dest += num_output_channels * 2)
-                {
-                    // Red pixel
-                    uint8_t* cur_pixel = dest;
-                    cur_pixel[-1 * swap_br] =
-                        (source[0] + source[2] + source[source_stride * 2] +
-                         source[source_stride * 2 + 2] + 2) >>
-                        2;
-                    ;
-                    cur_pixel[0] = (source[1] + source[source_stride] +
-                                    source[source_stride + 2] +
-                                    source[source_stride * 2 + 1] + 2) >>
-                                   2;
-                    ;
-                    cur_pixel[1 * swap_br] = source[source_stride + 1];
-
-                    // Green pixel
-                    uint8_t* next_pixel = cur_pixel + num_output_channels;
-                    next_pixel[-1 * swap_br] =
-                        (source[2] + source[source_stride * 2 + 2] + 1) >> 1;
-                    next_pixel[0] = source[source_stride + 2];
-                    next_pixel[1 * swap_br] =
-                        (source[source_stride + 1] + source[source_stride + 3] + 1) >> 1;
-                }
-            }
-
-            if (source < source_end)
-            {
-                dest[-1 * swap_br] = source[source_stride + 1];
-                dest[0] = (source[1] + source[source_stride] + source[source_stride + 2] +
-                           source[source_stride * 2 + 1] + 2) >>
-                          2;
-                dest[1 * swap_br] = (source[0] + source[2] + source[source_stride * 2] +
-                                     source[source_stride * 2 + 2] + 2) >>
-                                    2;
-                ;
-
-                source++;
-                dest += num_output_channels;
-            }
-
-            // Fill first pixel of row (copy second pixel)
-            uint8_t* first_pixel = dest_row - num_output_channels;
-            first_pixel[-1 * swap_br] = dest_row[-1 * swap_br];
-            first_pixel[0] = dest_row[0];
-            first_pixel[1 * swap_br] = dest_row[1 * swap_br];
-
-            // Fill last pixel of row (copy second-to-last pixel). Note: dest row
-            // starts at the *second* pixel of the row, so dest_row + (width-2)
-            // * num_output_channels puts us at the last pixel of the row
-            uint8_t* last_pixel = dest_row + (frame_width - 2) * num_output_channels;
-            uint8_t* second_to_last_pixel = last_pixel - num_output_channels;
-
-            last_pixel[-1 * swap_br] = second_to_last_pixel[-1 * swap_br];
-            last_pixel[0] = second_to_last_pixel[0];
-            last_pixel[1 * swap_br] = second_to_last_pixel[1 * swap_br];
-        }
-
-        // Fill first & last row
-        for (int i = 0; i < dest_stride; i++)
-        {
-            outBuffer[i] = outBuffer[i + dest_stride];
-            outBuffer[i + (frame_height - 1) * dest_stride] =
-                outBuffer[i + (frame_height - 2) * dest_stride];
-        }
-    }
-
-    private:
-    uint32_t frame_size;
-    uint32_t num_frames;
-
-    uint8_t* frame_buffer;
-    uint32_t head;
-    uint32_t tail;
-    uint32_t available;
-
-    std::mutex mutex;
-    std::condition_variable empty_condition;
-};
-
-// URBDesc
-
-class URBDesc
-{
-    public:
-    URBDesc()
-        : num_active_transfers(0),
-          last_packet_type(DISCARD_PACKET),
-          last_pts(0),
-          last_fid(0),
-          transfer_buffer(NULL),
-          cur_frame_start(NULL),
-          cur_frame_data_len(0),
-          frame_size(0),
-          frame_queue(NULL)
-    {
-    }
-
-    ~URBDesc()
-    {
-        debug("URBDesc destructor\n");
-        close_transfers();
-    }
-
-    bool start_transfers(libusb_device_handle* handle, uint32_t curr_frame_size)
-    {
-        // Initialize the frame queue
-        frame_size = curr_frame_size;
-        frame_queue = new FrameQueue(frame_size);
-
-        // Initialize the current frame pointer to the start of the buffer; it
-        // will be updated as frames are completed and pushed onto the frame queue
-        cur_frame_start = frame_queue->GetFrameBufferStart();
-        cur_frame_data_len = 0;
-
-        // Find the bulk transfer endpoint
-        uint8_t bulk_endpoint = find_ep(libusb_get_device(handle));
-        libusb_clear_halt(handle, bulk_endpoint);
-
-        // Allocate the transfer buffer
-        transfer_buffer = (uint8_t*)malloc(TRANSFER_SIZE * NUM_TRANSFERS);
-        memset(transfer_buffer, 0, TRANSFER_SIZE * NUM_TRANSFERS);
-
-        int res = 0;
-        for (int index = 0; index < NUM_TRANSFERS; ++index)
-        {
-            // Create & submit the transfer
-            xfr[index] = libusb_alloc_transfer(0);
-            libusb_fill_bulk_transfer(xfr[index], handle, bulk_endpoint,
-                                      transfer_buffer + index * TRANSFER_SIZE,
-                                      TRANSFER_SIZE, transfer_completed_callback,
-                                      reinterpret_cast<void*>(this), 0);
-
-            res |= libusb_submit_transfer(xfr[index]);
-
-            num_active_transfers++;
-        }
-
-        last_pts = 0;
-        last_fid = 0;
-
-        USBMgr::instance()->cameraStarted();
-
-        return res == 0;
-    }
-
-    void close_transfers()
-    {
-        std::unique_lock<std::mutex> lock(num_active_transfers_mutex);
-        if (num_active_transfers == 0) return;
-
-        // Cancel any pending transfers
-        for (int index = 0; index < NUM_TRANSFERS; ++index)
-        {
-            libusb_cancel_transfer(xfr[index]);
-        }
-
-        // Wait for cancelation to finish
-        num_active_transfers_condition.wait(lock, [this]() {
-            return num_active_transfers == 0;
-        });
-
-        // Free completed transfers
-        for (int index = 0; index < NUM_TRANSFERS; ++index)
-        {
-            libusb_free_transfer(xfr[index]);
-            xfr[index] = nullptr;
-        }
-
-        USBMgr::instance()->cameraStopped();
-
-        free(transfer_buffer);
-        transfer_buffer = NULL;
-
-        delete frame_queue;
-        frame_queue = NULL;
-    }
-
-    void transfer_canceled()
-    {
-        std::lock_guard<std::mutex> lock(num_active_transfers_mutex);
-        --num_active_transfers;
-        num_active_transfers_condition.notify_one();
-    }
-
-    void frame_add(enum gspca_packet_type packet_type, const uint8_t* data, int len)
-    {
-        if (packet_type == FIRST_PACKET)
-        {
-            cur_frame_data_len = 0;
-        }
-        else
-        {
-            switch (last_packet_type) // ignore warning.
-            {
-            case DISCARD_PACKET:
-                if (packet_type == LAST_PACKET)
-                {
-                    last_packet_type = packet_type;
-                    cur_frame_data_len = 0;
-                }
-                return;
-            case LAST_PACKET:
-                return;
-            default:
-                break;
-            }
-        }
-
-        /* append the packet to the frame buffer */
-        if (len > 0)
-        {
-            if (cur_frame_data_len + len > frame_size)
-            {
-                packet_type = DISCARD_PACKET;
-                cur_frame_data_len = 0;
-            }
-            else
-            {
-                memcpy(cur_frame_start + cur_frame_data_len, data, len);
-                cur_frame_data_len += len;
-            }
-        }
-
-        last_packet_type = packet_type;
-
-        if (packet_type == LAST_PACKET)
-        {
-            cur_frame_data_len = 0;
-            cur_frame_start = frame_queue->Enqueue();
-            // debug("frame completed %d\n", frame_complete_ind);
-        }
-    }
-
-    void pkt_scan(uint8_t* data, int len)
-    {
-        uint32_t this_pts;
-        uint16_t this_fid;
-        int remaining_len = len;
-        int payload_len;
-
-        payload_len = 2048; // bulk type
-        do
-        {
-            len = (std::min)(remaining_len, payload_len);
-
-            /* Payloads are prefixed with a UVC-style header.  We
-               consider a frame to start when the FID toggles, or the PTS
-               changes.  A frame ends when EOF is set, and we've received
-               the correct number of bytes. */
-
-            /* Verify UVC header.  Header length is always 12 */
-            if (data[0] != 12 || len < 12)
-            {
-                debug("bad header\n");
-                goto discard;
-            }
-
-            /* Check errors */
-            if (data[1] & UVC_STREAM_ERR)
-            {
-                debug("payload error\n");
-                goto discard;
-            }
-
-            /* Extract PTS and FID */
-            if (!(data[1] & UVC_STREAM_PTS))
-            {
-                debug("PTS not present\n");
-                goto discard;
-            }
-
-            this_pts = (data[5] << 24) | (data[4] << 16) | (data[3] << 8) | data[2];
-            this_fid = (data[1] & UVC_STREAM_FID) ? 1 : 0;
-
-            /* If PTS or FID has changed, start a new frame. */
-            if (this_pts != last_pts || this_fid != last_fid)
-            {
-                if (last_packet_type == INTER_PACKET)
-                {
-                    /* The last frame was incomplete, so don't keep it or we
-                     * will glitch */
-                    frame_add(DISCARD_PACKET, NULL, 0);
-                }
-                last_pts = this_pts;
-                last_fid = this_fid;
-                frame_add(FIRST_PACKET, data + 12, len - 12);
-            } /* If this packet is marked as EOF, end the frame */
-            else if (data[1] & UVC_STREAM_EOF)
-            {
-                last_pts = 0;
-                if (cur_frame_data_len + len - 12 != frame_size)
-                {
-                    goto discard;
-                }
-                frame_add(LAST_PACKET, data + 12, len - 12);
-            }
-            else
-            {
-                /* Add the data from this payload */
-                frame_add(INTER_PACKET, data + 12, len - 12);
-            }
-
-            /* Done this payload */
-            goto scan_next;
-
-        discard:
-            /* Discard data until a new frame starts. */
-            frame_add(DISCARD_PACKET, NULL, 0);
-        scan_next:
-            remaining_len -= len;
-            data += len;
-        } while (remaining_len > 0);
-    }
-
-    uint8_t num_active_transfers;
-    std::mutex num_active_transfers_mutex;
-    std::condition_variable num_active_transfers_condition;
-
-    enum gspca_packet_type last_packet_type;
-    uint32_t last_pts;
-    uint16_t last_fid;
-    libusb_transfer* xfr[NUM_TRANSFERS];
-
-    uint8_t* transfer_buffer;
-    uint8_t* cur_frame_start;
-    uint32_t cur_frame_data_len;
-    uint32_t frame_size;
-    FrameQueue* frame_queue;
-};
-
-static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
-{
-    URBDesc* urb = reinterpret_cast<URBDesc*>(xfr->user_data);
-    enum libusb_transfer_status status = xfr->status;
-
-    if (status != LIBUSB_TRANSFER_COMPLETED)
-    {
-        debug("transfer status %d\n", status);
-
-        urb->transfer_canceled();
-
-        if (status != LIBUSB_TRANSFER_CANCELLED)
-        {
-            urb->close_transfers();
-        }
-        return;
-    }
-
-    // debug("length:%u, actual_length:%u\n", xfr->length, xfr->actual_length);
-
-    urb->pkt_scan(xfr->buffer, xfr->actual_length);
-
-    if (libusb_submit_transfer(xfr) < 0)
-    {
-        debug("error re-submitting URB\n");
-        urb->close_transfers();
-    }
-}
-
-// PS3EYECam
-
-bool PS3EYECam::devicesEnumerated = false;
-std::vector<PS3EYECam::PS3EYERef> PS3EYECam::devices;
-
-const std::vector<PS3EYECam::PS3EYERef>& PS3EYECam::getDevices(bool forceRefresh)
-{
-    if (devicesEnumerated && (!forceRefresh)) return devices;
-
-    devices.clear();
-
-    USBMgr::instance()->sTotalDevices = USBMgr::instance()->listDevices(devices);
-
-    devicesEnumerated = true;
-    return devices;
-}
-
 PS3EYECam::PS3EYECam(libusb_device* device)
 {
-    // default controls
-    autogain = false;
-    gain = 20;
-    exposure = 120;
-    sharpness = 0;
-    hue = 143;
-    awb = false;
-    brightness = 20;
-    contrast = 37;
-    blueblc = 128;
-    redblc = 128;
-    greenblc = 128;
-    flip_h = false;
-    flip_v = false;
-    testPattern = false;
-    usb_buf = NULL;
-    handle_ = NULL;
-
-    is_streaming = false;
-
     device_ = device;
     mgrPtr = USBMgr::instance();
-    urb = std::shared_ptr<URBDesc>(new URBDesc());
+    urb = std::make_shared<URBDesc>();
 }
 
 PS3EYECam::~PS3EYECam()
@@ -1120,8 +158,7 @@ PS3EYECam::~PS3EYECam()
 
 void PS3EYECam::release()
 {
-    if (handle_ != NULL) close_usb();
-    if (usb_buf) free(usb_buf);
+    if (handle_) close_usb();
 }
 
 bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate, EOutputFormat outputFormat)
@@ -1129,16 +166,13 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
     uint16_t sensor_id;
 
     // open usb device so we can setup and go
-    if (handle_ == NULL)
+    if (!handle_)
     {
         if (!open_usb())
         {
             return false;
         }
     }
-
-    //
-    if (usb_buf == NULL) usb_buf = (uint8_t*)malloc(64);
 
     // find best cam mode
     if ((width == 0 && height == 0) || width > 320 || height > 240)
@@ -1162,7 +196,10 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
 #ifdef _MSC_VER
     Sleep(100);
 #else
-    nanosleep((const struct timespec[]){ { 0, 100000000 } }, NULL);
+    {
+        struct timespec ts { 0, 100000000 };
+        nanosleep(&ts, NULL);
+    }
 #endif
 
     /* initialize the sensor address */
@@ -1173,7 +210,10 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
 #ifdef _MSC_VER
     Sleep(10);
 #else
-    nanosleep((const struct timespec[]){ { 0, 10000000 } }, NULL);
+    {
+        const struct timespec ts { 0, 10000000 };
+        nanosleep(&ts, NULL);
+    }
 #endif
 
     /* probe the sensor */
@@ -1181,12 +221,12 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
     sensor_id = sccb_reg_read(0x0a) << 8;
     sccb_reg_read(0x0b);
     sensor_id |= sccb_reg_read(0x0b);
-    debug("Sensor ID: %04x\n", sensor_id);
+    ps3eye_debug("Sensor ID: %04x\n", sensor_id);
 
     /* initialize */
-    reg_w_array(ov534_reg_initdata, ARRAY_SIZE(ov534_reg_initdata));
+    reg_w_array(ov534_reg_initdata, std::size(ov534_reg_initdata));
     ov534_set_led(1);
-    sccb_w_array(ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata));
+    sccb_w_array(ov772x_reg_initdata, std::size(ov772x_reg_initdata));
     ov534_reg_write(0xe0, 0x09);
     ov534_set_led(0);
 
@@ -1199,13 +239,13 @@ void PS3EYECam::start()
 
     if (frame_width == 320)
     { /* 320x240 */
-        reg_w_array(bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga));
-        sccb_w_array(sensor_start_qvga, ARRAY_SIZE(sensor_start_qvga));
+        reg_w_array(bridge_start_qvga, std::size(bridge_start_qvga));
+        sccb_w_array(sensor_start_qvga, std::size(sensor_start_qvga));
     }
     else
     { /* 640x480 */
-        reg_w_array(bridge_start_vga, ARRAY_SIZE(bridge_start_vga));
-        sccb_w_array(sensor_start_vga, ARRAY_SIZE(sensor_start_vga));
+        reg_w_array(bridge_start_vga, std::size(bridge_start_vga));
+        sccb_w_array(sensor_start_vga, std::size(sensor_start_vga));
     }
 
     ov534_set_frame_rate(frame_rate);
@@ -1307,7 +347,7 @@ uint32_t PS3EYECam::getOutputBytesPerPixel() const
 
 void PS3EYECam::getFrame(uint8_t* frame)
 {
-    urb->frame_queue->Dequeue(frame, frame_width, frame_height, frame_output_format);
+    (void)urb->frame_queue->Dequeue(frame, frame_width, frame_height, frame_output_format);
 }
 
 bool PS3EYECam::open_usb()
@@ -1316,7 +356,7 @@ bool PS3EYECam::open_usb()
     int res = libusb_open(device_, &handle_);
     if (res != 0)
     {
-        debug("device open error: %d\n", res);
+        ps3eye_debug("device open error: %d\n", res);
         return false;
     }
 
@@ -1330,7 +370,7 @@ bool PS3EYECam::open_usb()
     res = libusb_claim_interface(handle_, 0);
     if (res != 0)
     {
-        debug("device claim interface error: %d\n", res);
+        ps3eye_debug("device claim interface error: %d\n", res);
         return false;
     }
 
@@ -1339,14 +379,14 @@ bool PS3EYECam::open_usb()
 
 void PS3EYECam::close_usb()
 {
-    debug("closing device\n");
+    ps3eye_debug("closing device\n");
     libusb_release_interface(handle_, 0);
     libusb_attach_kernel_driver(handle_, 0);
     libusb_close(handle_);
     libusb_unref_device(device_);
     handle_ = NULL;
     device_ = NULL;
-    debug("device closed\n");
+    ps3eye_debug("device closed\n");
 }
 
 /* Two bits control LED: 0x21 bit 7 and 0x23 bit 7.
@@ -1355,7 +395,7 @@ void PS3EYECam::ov534_set_led(int status)
 {
     uint8_t data;
 
-    debug("led status: %d\n", status);
+    ps3eye_debug("led status: %d\n", status);
 
     data = ov534_reg_read(0x21);
     data |= 0x80;
@@ -1380,6 +420,9 @@ void PS3EYECam::ov534_set_led(int status)
 /* validate frame rate and (if not dry run) set it */
 uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
 {
+    if (frame_rate < 2)
+        frame_rate = 60;
+
     int i;
     struct rate_s
     {
@@ -1429,12 +472,12 @@ uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
     if (frame_width == 640)
     {
         r = rate_0;
-        i = ARRAY_SIZE(rate_0);
+        i = std::size(rate_0);
     }
     else
     {
         r = rate_1;
-        i = ARRAY_SIZE(rate_1);
+        i = std::size(rate_1);
     }
     while (--i > 0)
     {
@@ -1449,7 +492,7 @@ uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
         ov534_reg_write(0xe5, r->re5);
     }
 
-    debug("frame_rate: %d\n", r->fps);
+    ps3eye_debug("frame_rate: %d\n", r->fps);
     return r->fps;
 }
 
@@ -1461,10 +504,10 @@ void PS3EYECam::ov534_reg_write(uint16_t reg, uint8_t val)
     usb_buf[0] = val;
 
     ret = libusb_control_transfer(handle_, LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
-                                  0x01, 0x00, reg, usb_buf, 1, 500);
+                                  0x01, 0x00, reg, usb_buf.data(), 1, 500);
     if (ret < 0)
     {
-        debug("write failed\n");
+        ps3eye_debug("write failed\n");
     }
 }
 
@@ -1473,12 +516,12 @@ uint8_t PS3EYECam::ov534_reg_read(uint16_t reg)
     int ret;
 
     ret = libusb_control_transfer(handle_, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
-                                  0x01, 0x00, reg, usb_buf, 1, 500);
+                                  0x01, 0x00, reg, usb_buf.data(), 1, 500);
 
     // debug("reg=0x%04x, data=0x%02x", reg, usb_buf[0]);
     if (ret < 0)
     {
-        debug("read failed\n");
+        ps3eye_debug("read failed\n");
     }
     return usb_buf[0];
 }
@@ -1501,7 +544,7 @@ int PS3EYECam::sccb_check_status()
         case 0x03:
             break;
         default:
-            debug("sccb status 0x%02x, attempt %d/5\n", data, i + 1);
+            ps3eye_debug("sccb status 0x%02x, attempt %d/5\n", data, i + 1);
         }
     }
     return 0;
@@ -1516,7 +559,7 @@ void PS3EYECam::sccb_reg_write(uint8_t reg, uint8_t val)
 
     if (!sccb_check_status())
     {
-        debug("sccb_reg_write failed\n");
+        ps3eye_debug("sccb_reg_write failed\n");
     }
 }
 
@@ -1526,13 +569,13 @@ uint8_t PS3EYECam::sccb_reg_read(uint16_t reg)
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_WRITE_2);
     if (!sccb_check_status())
     {
-        debug("sccb_reg_read failed 1\n");
+        ps3eye_debug("sccb_reg_read failed 1\n");
     }
 
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_READ_2);
     if (!sccb_check_status())
     {
-        debug("sccb_reg_read failed 2\n");
+        ps3eye_debug("sccb_reg_read failed 2\n");
     }
 
     return ov534_reg_read(OV534_REG_READ);
@@ -1563,6 +606,160 @@ void PS3EYECam::sccb_w_array(const uint8_t (*data)[2], int len)
         }
         data++;
     }
+}
+
+bool PS3EYECam::devicesEnumerated = false;
+std::vector<std::shared_ptr<PS3EYECam>> PS3EYECam::devices;
+
+const std::vector<std::shared_ptr<PS3EYECam>>& PS3EYECam::getDevices(bool forceRefresh)
+{
+    if (devicesEnumerated && (!forceRefresh)) return devices;
+
+    devices.clear();
+
+    //USBMgr::instance()->sTotalDevices =
+    USBMgr::instance()->listDevices(devices);
+
+    devicesEnumerated = true;
+    return devices;
+}
+
+void PS3EYECam::setAutogain(bool val)
+{
+    autogain = val;
+    if (val)
+    {
+        sccb_reg_write(0x13, 0xf7); // AGC,AEC,AWB ON
+        sccb_reg_write(0x64, sccb_reg_read(0x64) | 0x03);
+    }
+    else
+    {
+        sccb_reg_write(0x13, 0xf0); // AGC,AEC,AWB OFF
+        sccb_reg_write(0x64, sccb_reg_read(0x64) & 0xFC);
+
+        setGain(gain);
+        setExposure(exposure);
+    }
+}
+
+void PS3EYECam::setAutoWhiteBalance(bool val)
+{
+    awb = val;
+    if (val)
+    {
+        sccb_reg_write(0x63, 0xe0); // AWB ON
+    }
+    else
+    {
+        sccb_reg_write(0x63, 0xAA); // AWB OFF
+    }
+}
+
+bool PS3EYECam::setFrameRate(int val)
+{
+    if (is_streaming) return false;
+    frame_rate = ov534_set_frame_rate((uint8_t)std::clamp(val, 0, 512), true);
+    return true;
+}
+
+void PS3EYECam::setTestPattern(bool enable)
+{
+    testPattern = enable;
+    uint8_t val = sccb_reg_read(0x0C);
+    val &= ~0b00000001;
+    if (testPattern) val |= 0b00000001; // 0x80;
+    sccb_reg_write(0x0C, val);
+}
+
+bool PS3EYECam::isInitialized() const
+{
+    return device_ && handle_;
+}
+
+void PS3EYECam::setExposure(int val)
+{
+    exposure = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x08, exposure >> 7);
+    sccb_reg_write(0x10, uint8_t(exposure << 1));
+}
+
+void PS3EYECam::setSharpness(int val)
+{
+    sharpness = (uint8_t)std::clamp(val, 0, 63);
+    sccb_reg_write(0x91, sharpness); // vga noise
+    sccb_reg_write(0x8E, sharpness); // qvga noise
+}
+
+void PS3EYECam::setContrast(int val)
+{
+    contrast = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x9C, contrast);
+}
+
+void PS3EYECam::setBrightness(int val)
+{
+    brightness = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x9B, brightness);
+}
+
+void PS3EYECam::setHue(int val)
+{
+    hue = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x01, hue);
+}
+
+void PS3EYECam::setRedBalance(int val)
+{
+    redblc = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x43, redblc);
+}
+
+void PS3EYECam::setBlueBalance(int val)
+{
+    blueblc = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x42, blueblc);
+}
+
+void PS3EYECam::setGreenBalance(int val)
+{
+    greenblc = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x44, greenblc);
+}
+
+void PS3EYECam::setFlip(bool horizontal, bool vertical)
+{
+    flip_h = horizontal;
+    flip_v = vertical;
+    uint8_t val = sccb_reg_read(0x0c);
+    val &= ~0xc0;
+    if (!horizontal) val |= 0x40;
+    if (!vertical) val |= 0x80;
+    sccb_reg_write(0x0c, val);
+}
+
+void PS3EYECam::setGain(int val)
+{
+    gain = (uint8_t)std::clamp(val, 0, 63);
+    val = gain;
+    switch (val & 0x30)
+    {
+    case 0x00:
+        val &= 0x0F;
+        break;
+    case 0x10:
+        val &= 0x0F;
+        val |= 0x30;
+        break;
+    case 0x20:
+        val &= 0x0F;
+        val |= 0x70;
+        break;
+    case 0x30:
+        val &= 0x0F;
+        val |= 0xF0;
+        break;
+    }
+    sccb_reg_write(0x00, val);
 }
 
 } // namespace ps3eye

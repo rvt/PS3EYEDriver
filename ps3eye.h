@@ -1,38 +1,28 @@
 // source code from https://github.com/inspirit/PS3EYEDriver
-#ifndef PS3EYECAM_H
-#define PS3EYECAM_H
+#pragma once
 
+#include "internal.hpp"
+
+#include <cstdint>
 #include <memory>
 #include <vector>
+#include <array>
 
 struct libusb_device;
 struct libusb_device_handle;
 
-#ifndef __STDC_CONSTANT_MACROS
-#define __STDC_CONSTANT_MACROS
-#endif
-
-#include <stdint.h>
-
 namespace ps3eye
 {
-class PS3EYECam
+
+struct URBDesc;
+struct USBMgr;
+struct PS3EYECam;
+
+using PS3EYERef = std::shared_ptr<PS3EYECam>;
+
+struct PS3EYECam
 {
-    public:
-    enum class EOutputFormat
-    {
-        Bayer, // Output in Bayer. Destination buffer must be width * height bytes
-        BGR, // Output in BGR. Destination buffer must be width * height * 3 bytes
-        RGB, // Output in RGB. Destination buffer must be width * height * 3 bytes
-        Gray // Output in Grayscale. Destination buffer must be width * height bytes
-    };
-
-    typedef std::shared_ptr<PS3EYECam> PS3EYERef;
-
-    static const uint16_t VENDOR_ID;
-    static const uint16_t PRODUCT_ID;
-
-    PS3EYECam(libusb_device* device);
+    explicit PS3EYECam(libusb_device* device);
     ~PS3EYECam();
 
     bool init(uint32_t width = 0,
@@ -45,138 +35,36 @@ class PS3EYECam
     // Controls
 
     bool getAutogain() const { return autogain; }
-    void setAutogain(bool val)
-    {
-        autogain = val;
-        if (val)
-        {
-            sccb_reg_write(0x13, 0xf7); // AGC,AEC,AWB ON
-            sccb_reg_write(0x64, sccb_reg_read(0x64) | 0x03);
-        }
-        else
-        {
-            sccb_reg_write(0x13, 0xf0); // AGC,AEC,AWB OFF
-            sccb_reg_write(0x64, sccb_reg_read(0x64) & 0xFC);
-
-            setGain(gain);
-            setExposure(exposure);
-        }
-    }
+    void setAutogain(bool val);
     bool getAutoWhiteBalance() const { return awb; }
-    void setAutoWhiteBalance(bool val)
-    {
-        awb = val;
-        if (val)
-        {
-            sccb_reg_write(0x63, 0xe0); // AWB ON
-        }
-        else
-        {
-            sccb_reg_write(0x63, 0xAA); // AWB OFF
-        }
-    }
+    void setAutoWhiteBalance(bool val);
     uint8_t getGain() const { return gain; }
-    void setGain(uint8_t val)
-    {
-        gain = val;
-        switch (val & 0x30)
-        {
-        case 0x00:
-            val &= 0x0F;
-            break;
-        case 0x10:
-            val &= 0x0F;
-            val |= 0x30;
-            break;
-        case 0x20:
-            val &= 0x0F;
-            val |= 0x70;
-            break;
-        case 0x30:
-            val &= 0x0F;
-            val |= 0xF0;
-            break;
-        }
-        sccb_reg_write(0x00, val);
-    }
+    void setGain(int val);
     uint8_t getExposure() const { return exposure; }
-    void setExposure(uint8_t val)
-    {
-        exposure = val;
-        sccb_reg_write(0x08, val >> 7);
-        sccb_reg_write(0x10, val << 1);
-    }
+    void setExposure(int val);
     uint8_t getSharpness() const { return sharpness; }
-    void setSharpness(uint8_t val)
-    {
-        sharpness = val;
-        sccb_reg_write(0x91, val); // vga noise
-        sccb_reg_write(0x8E, val); // qvga noise
-    }
+    void setSharpness(int val);
     uint8_t getContrast() const { return contrast; }
-    void setContrast(uint8_t val)
-    {
-        contrast = val;
-        sccb_reg_write(0x9C, val);
-    }
+    void setContrast(int val);
     uint8_t getBrightness() const { return brightness; }
-    void setBrightness(uint8_t val)
-    {
-        brightness = val;
-        sccb_reg_write(0x9B, val);
-    }
+    void setBrightness(int val);
     uint8_t getHue() const { return hue; }
-    void setHue(uint8_t val)
-    {
-        hue = val;
-        sccb_reg_write(0x01, val);
-    }
+    void setHue(int val);
     uint8_t getRedBalance() const { return redblc; }
-    void setRedBalance(uint8_t val)
-    {
-        redblc = val;
-        sccb_reg_write(0x43, val);
-    }
+    void setRedBalance(int val);
     uint8_t getBlueBalance() const { return blueblc; }
-    void setBlueBalance(uint8_t val)
-    {
-        blueblc = val;
-        sccb_reg_write(0x42, val);
-    }
+    void setBlueBalance(int val);
     uint8_t getGreenBalance() const { return greenblc; }
-    void setGreenBalance(uint8_t val)
-    {
-        greenblc = val;
-        sccb_reg_write(0x44, val);
-    }
+    void setGreenBalance(int val);
     bool getFlipH() const { return flip_h; }
     bool getFlipV() const { return flip_v; }
-    void setFlip(bool horizontal = false, bool vertical = false)
-    {
-        flip_h = horizontal;
-        flip_v = vertical;
-        uint8_t val = sccb_reg_read(0x0c);
-        val &= ~0xc0;
-        if (!horizontal) val |= 0x40;
-        if (!vertical) val |= 0x80;
-        sccb_reg_write(0x0c, val);
-    }
+    void setFlip(bool horizontal = false, bool vertical = false);
 
     bool getTestPattern() const { return testPattern; }
-    void setTestPattern(bool enable)
-    {
-        testPattern = enable;
-        uint8_t val = sccb_reg_read(0x0C);
-        val &= ~0b00000001;
-        if (testPattern) val |= 0b00000001; // 0x80;
-        sccb_reg_write(0x0C, val);
-    }
+    void setTestPattern(bool enable);
 
     bool isStreaming() const { return is_streaming; }
-    bool isInitialized() const
-    {
-        return device_ != NULL && handle_ != NULL && usb_buf != NULL;
-    }
+    bool isInitialized() const;
 
     libusb_device* getDevice() const { return device_; }
     bool getUSBPortPath(char* out_identifier, size_t max_identifier_length) const;
@@ -190,25 +78,16 @@ class PS3EYECam
     uint32_t getWidth() const { return frame_width; }
     uint32_t getHeight() const { return frame_height; }
     uint16_t getFrameRate() const { return frame_rate; }
-    bool setFrameRate(uint8_t val)
-    {
-        if (is_streaming) return false;
-        frame_rate = ov534_set_frame_rate(val, true);
-        return true;
-    }
-    uint32_t getRowBytes() const
-    {
-        return frame_width * getOutputBytesPerPixel();
-    }
+    [[nodiscard]] bool setFrameRate(int val);
+    uint32_t getRowBytes() const { return frame_width * getOutputBytesPerPixel(); }
     uint32_t getOutputBytesPerPixel() const;
 
-    //
-    static const std::vector<PS3EYERef>& getDevices(bool forceRefresh = false);
+    static const std::vector<std::shared_ptr<PS3EYECam>>& getDevices(bool forceRefresh = false);
 
-    private:
-    PS3EYECam(const PS3EYECam&);
-    void operator=(const PS3EYECam&);
+    PS3EYECam(const PS3EYECam&) = delete;
+    void operator=(const PS3EYECam&) = delete;
 
+private:
     void release();
 
     // usb ops
@@ -223,44 +102,41 @@ class PS3EYECam
     void sccb_w_array(const uint8_t (*data)[2], int len);
 
     // controls
-    bool autogain;
-    uint8_t gain;      // 0 <-> 63
-    uint8_t exposure;  // 0 <-> 255
-    uint8_t sharpness; // 0 <-> 63
-    uint8_t hue;       // 0 <-> 255
-    bool awb;
-    uint8_t brightness; // 0 <-> 255
-    uint8_t contrast;   // 0 <-> 255
-    uint8_t blueblc;    // 0 <-> 255
-    uint8_t redblc;     // 0 <-> 255
-    uint8_t greenblc;   // 0 <-> 255
-    bool flip_h;
-    bool flip_v;
-    bool testPattern;
-    //
-    bool is_streaming;
+    bool autogain = false;
+    uint8_t gain = 20; // 0 <-> 63
+    uint8_t exposure = 120;  // 0 <-> 255
+    uint8_t sharpness = 0; // 0 <-> 63
+    uint8_t hue = 143;       // 0 <-> 255
+    bool awb = false;
+    uint8_t brightness = 20; // 0 <-> 255
+    uint8_t contrast = 37;   // 0 <-> 255
+    uint8_t blueblc = 128;    // 0 <-> 255
+    uint8_t redblc = 128;     // 0 <-> 255
+    uint8_t greenblc = 128;   // 0 <-> 255
+    bool flip_h = false;
+    bool flip_v = false;
+    bool testPattern = false;
+    bool is_streaming = false;
 
-    std::shared_ptr<class USBMgr> mgrPtr;
+    std::shared_ptr<USBMgr> mgrPtr;
 
     static bool devicesEnumerated;
-    static std::vector<PS3EYERef> devices;
+    static std::vector<std::shared_ptr<PS3EYECam>> devices;
 
-    uint32_t frame_width;
-    uint32_t frame_height;
+    int frame_width = 0;
+    int frame_height = 0;
     uint16_t frame_rate;
-    EOutputFormat frame_output_format;
+    EOutputFormat frame_output_format = EOutputFormat::BGR;
 
     // usb stuff
-    libusb_device* device_;
-    libusb_device_handle* handle_;
-    uint8_t* usb_buf;
+    libusb_device* device_ = nullptr;
+    libusb_device_handle* handle_ = nullptr;
+    std::array<uint8_t, 64> usb_buf;
 
-    std::shared_ptr<class URBDesc> urb;
+    std::shared_ptr<URBDesc> urb;
 
     bool open_usb();
     void close_usb();
 };
 
 } // namespace ps3eye
-
-#endif

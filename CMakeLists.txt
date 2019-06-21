@@ -1,4 +1,13 @@
-list(APPEND CMAKE_MODULE_PATH "${cmake-modules}")
+add_definitions(-DNOMINMAX)
+add_definitions(-DWIN32_LEAN_AND_MEAN)
+add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+
+if(NOT WIN32)
+    add_definitions(-pthread)
+    link_libraries(-pthread)
+endif()
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 if(NOT MSVC)
     if(PKG_CONFIG_FOUND)
@@ -18,6 +27,12 @@ else()
 endif()
 
 if(libusb_FOUND)
-    add_library(ps3eye-driver STATIC "ps3eye.cpp")
-    add_subdirectory("sdl")
+    add_library(ps3eye-driver STATIC
+        "ps3eye.cpp"
+        "urb.cpp"
+        "queue.cpp"
+        "mgr.cpp"
+    )
 endif()
+
+add_subdirectory("sdl")

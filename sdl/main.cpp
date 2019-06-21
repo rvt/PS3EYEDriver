@@ -3,7 +3,7 @@
  * Thomas Perl <m@thp.io>; 2014-01-10
  * Joseph Howse <josephhowse@nummist.com>; 2014-12-26
  **/
-#include "ps3eye.h"
+#include "../ps3eye.h"
 #include <SDL.h>
 #include <iostream>
 #include <sstream>
@@ -11,11 +11,6 @@
 struct ps3eye_context
 {
     ps3eye_context(int width, int height, int fps)
-        : eye(0),
-          devices(ps3eye::PS3EYECam::getDevices()),
-          running(true),
-          last_ticks(0),
-          last_frames(0)
     {
         if (hasDevices())
         {
@@ -26,12 +21,12 @@ struct ps3eye_context
 
     bool hasDevices() { return (devices.size() > 0); }
 
-    std::vector<ps3eye::PS3EYECam::PS3EYERef> devices;
-    ps3eye::PS3EYECam::PS3EYERef eye;
+    std::vector<std::shared_ptr<ps3eye::PS3EYECam>> devices { ps3eye::PS3EYECam::getDevices() };
+    std::shared_ptr<ps3eye::PS3EYECam> eye;
 
-    bool running;
-    Uint32 last_ticks;
-    Uint32 last_frames;
+    Uint32 last_ticks = 0;
+    Uint32 last_frames = 0;
+    bool running = true;
 };
 
 void print_renderer_info(SDL_Renderer* renderer)

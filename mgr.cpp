@@ -1,7 +1,8 @@
 #include "mgr.hpp"
 #include "internal.hpp"
-#include "ps3eye.h"
+#include "ps3eye.hpp"
 
+#include <functional>
 #include <libusb.h>
 
 namespace ps3eye {
@@ -20,10 +21,10 @@ USBMgr::~USBMgr()
     libusb_exit(usb_context);
 }
 
-std::shared_ptr<USBMgr> USBMgr::instance()
+USBMgr& USBMgr::instance()
 {
-    static auto ret = std::make_shared<USBMgr>();
-    return ret;
+    static USBMgr ret;
+    return std::ref(ret);
 }
 
 void USBMgr::cameraStarted()
@@ -63,8 +64,10 @@ void USBMgr::transferThreadFunc()
     }
 }
 
-int USBMgr::listDevices(std::vector<std::shared_ptr<PS3EYECam>>& list)
+std::vector<std::shared_ptr<camera>> USBMgr::list_devices()
 {
+    std::vector<std::shared_ptr<camera>> list;
+
     libusb_device* dev;
     libusb_device** devs;
     libusb_device_handle* devhandle;
@@ -89,7 +92,7 @@ int USBMgr::listDevices(std::vector<std::shared_ptr<PS3EYECam>>& list)
             if (err == 0)
             {
                 libusb_close(devhandle);
-                list.push_back(std::make_shared<PS3EYECam>(dev));
+                list.push_back(std::make_shared<camera>(dev));
                 libusb_ref_device(dev);
                 cnt++;
             }
@@ -98,7 +101,7 @@ int USBMgr::listDevices(std::vector<std::shared_ptr<PS3EYECam>>& list)
 
     libusb_free_device_list(devs, 1);
 
-    return cnt;
+    return list;
 }
 
 } // ns ps3eye

@@ -3,14 +3,14 @@
  * Thomas Perl <m@thp.io>; 2014-01-10
  * Joseph Howse <josephhowse@nummist.com>; 2014-12-26
  **/
-#include "../ps3eye.h"
+#include "../ps3eye.hpp"
 #include <SDL.h>
 #include <iostream>
 #include <sstream>
 
-struct ps3eye_context
+struct context
 {
-    ps3eye_context(int width, int height, int fps)
+    context(int width, int height, int fps)
     {
         if (hasDevices())
         {
@@ -21,58 +21,57 @@ struct ps3eye_context
 
     bool hasDevices() { return (devices.size() > 0); }
 
-    std::vector<std::shared_ptr<ps3eye::PS3EYECam>> devices { ps3eye::PS3EYECam::getDevices() };
-    std::shared_ptr<ps3eye::PS3EYECam> eye;
+    std::shared_ptr<ps3eye::camera> eye;
+    std::vector<std::shared_ptr<ps3eye::camera>> devices { ps3eye::camera::list_devices() };
 
     Uint32 last_ticks = 0;
     Uint32 last_frames = 0;
     bool running = true;
 };
 
-void print_renderer_info(SDL_Renderer* renderer)
+static void print_renderer_info(SDL_Renderer* renderer)
 {
     SDL_RendererInfo renderer_info;
     SDL_GetRendererInfo(renderer, &renderer_info);
     printf("Renderer: %s\n", renderer_info.name);
 }
 
-void run_camera(int width, int height, int fps, Uint32 duration)
+static void run_camera(int width, int height, int fps, Uint32 duration)
 {
-    ps3eye_context ctx(width, height, fps);
+    context ctx(width, height, fps);
     if (!ctx.hasDevices())
     {
         printf("No PS3 Eye camera connected\n");
         return;
     }
-    ctx.eye->setFlip(true); /* mirrored left-right */
+    ctx.eye->set_flip_status(true); /* mirrored left-right */
 
     char title[256];
-    sprintf(title, "%dx%d@%d\n", ctx.eye->getWidth(), ctx.eye->getHeight(),
-            ctx.eye->getFrameRate());
+    sprintf(title, "%dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
 
     SDL_Window* window = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED,
                                           SDL_WINDOWPOS_UNDEFINED, width, height, 0);
-    if (window == NULL)
+    if (window == nullptr)
     {
         printf("Failed to create window: %s\n", SDL_GetError());
         return;
     }
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (renderer == NULL)
+    if (renderer == nullptr)
     {
         printf("Failed to create renderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         return;
     }
-    SDL_RenderSetLogicalSize(renderer, ctx.eye->getWidth(), ctx.eye->getHeight());
+    SDL_RenderSetLogicalSize(renderer, ctx.eye->width(), ctx.eye->height());
     print_renderer_info(renderer);
 
     SDL_Texture* video_tex =
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGR24, SDL_TEXTUREACCESS_STREAMING,
-                          ctx.eye->getWidth(), ctx.eye->getHeight());
+                          ctx.eye->width(), ctx.eye->height());
 
-    if (video_tex == NULL)
+    if (video_tex == nullptr)
     {
         printf("Failed to create video texture: %s\n", SDL_GetError());
         SDL_DestroyRenderer(renderer);
@@ -82,8 +81,7 @@ void run_camera(int width, int height, int fps, Uint32 duration)
 
     ctx.eye->start();
 
-    printf("Camera mode: %dx%d@%d\n", ctx.eye->getWidth(), ctx.eye->getHeight(),
-           ctx.eye->getFrameRate());
+    printf("Camera mode: %dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
 
     SDL_Event e;
 
@@ -109,8 +107,7 @@ void run_camera(int width, int height, int fps, Uint32 duration)
 
             if (now_ticks - ctx.last_ticks > 1000)
             {
-                printf("FPS: %.2f\n", 1000 * ctx.last_frames /
-                                          (float(now_ticks - ctx.last_ticks)));
+                fprintf(stderr, "FPS: %.2f\n", 1000 * ctx.last_frames / double(now_ticks - ctx.last_ticks));
                 ctx.last_ticks = now_ticks;
                 ctx.last_frames = 0;
             }
@@ -118,13 +115,14 @@ void run_camera(int width, int height, int fps, Uint32 duration)
 
         void* video_tex_pixels;
         int pitch;
-        SDL_LockTexture(video_tex, NULL, &video_tex_pixels, &pitch);
-
-        ctx.eye->getFrame((uint8_t*)video_tex_pixels);
-
+        SDL_LockTexture(video_tex, nullptr, &video_tex_pixels, &pitch);
+        bool status = ctx.eye->get_frame((uint8_t*)video_tex_pixels);
         SDL_UnlockTexture(video_tex);
 
-        SDL_RenderCopy(renderer, video_tex, NULL, NULL);
+        if (!status)
+            break;
+
+        SDL_RenderCopy(renderer, video_tex, nullptr, nullptr);
         SDL_RenderPresent(renderer);
     }
 
@@ -144,25 +142,25 @@ int main(int argc, char* argv[])
     if (argc > 1)
     {
         bool good_arg = false;
-        for (int arg_ix = 1; arg_ix < argc; ++arg_ix)
+        for (int i = 1; i < argc; i++)
         {
-            if (std::string(argv[arg_ix]) == "--qvga")
+            if (std::string(argv[i]) == "--qvga")
             {
                 width = 320;
                 height = 240;
                 good_arg = true;
             }
 
-            if ((std::string(argv[arg_ix]) == "--fps") && argc > arg_ix)
+            if ((std::string(argv[i]) == "--fps") && argc > i)
             {
-                std::istringstream new_fps_ss(argv[arg_ix + 1]);
+                std::istringstream new_fps_ss(argv[i + 1]);
                 if (new_fps_ss >> fps)
                 {
                     good_arg = true;
                 }
             }
 
-            if (std::string(argv[arg_ix]) == "--mode_test")
+            if (std::string(argv[i]) == "--mode_test")
             {
                 mode_test = true;
                 good_arg = true;

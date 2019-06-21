@@ -1,13 +1,27 @@
+#undef NDEBUG
 #include "queue.hpp"
+
 #include <chrono>
+#include <cassert>
 
 namespace ps3eye {
 
-uint8_t* FrameQueue::Enqueue()
+void frame_queue::init(unsigned frame_size)
 {
-    uint8_t* new_frame = nullptr;
+    size_ = frame_size;
+    head_ = 0;
+    tail_ = 0;
+    available_ = 0;
+}
 
-    std::lock_guard<std::mutex> lock(mutex);
+frame_queue::frame_queue() = default;
+
+uint8_t* frame_queue::enqueue()
+{
+    assert(size_ != UINT_MAX);
+
+    uint8_t* new_frame = nullptr;
+    std::lock_guard<std::mutex> lock(mutex_);
 
     // Unlike traditional producer/consumer, we don't block the producer if
     // the buffer is full (ie. the consumer is not reading data fast
@@ -21,28 +35,28 @@ uint8_t* FrameQueue::Enqueue()
     // buffer, we can only ever be a maximum of num_frames-1 ahead of the
     // consumer, otherwise the producer could overwrite the frame the
     // consumer is currently reading (in case of a slow consumer)
-    if (available >= BUF_FRAME_CNT - 1)
+    if (available_ >= max_buffered_frames - 1)
     {
-        return frame_buffer.data() + head * frame_size;
+        return buffer_.data() + head_ * size_;
     }
 
     // Note: we don't need to copy any data to the buffer since the USB
     // packets are directly written to the frame buffer. We just need to
     // update head and available count to signal to the consumer that a new
     // frame is available
-    head = (head + 1) % BUF_FRAME_CNT;
-    available++;
+    head_ = (head_ + 1) % max_buffered_frames;
+    available_++;
 
     // Determine the next frame pointer that the producer should write to
-    new_frame = frame_buffer.data() + head * frame_size;
+    new_frame = buffer_.data() + head_ * size_;
 
     // Signal consumer that data became available
-    empty_condition.notify_one();
+    notify_frame_.notify_one();
 
     return new_frame;
 }
 
-void FrameQueue::DebayerGray(int frame_width, int frame_height, const uint8_t* inBayer, uint8_t* outBuffer)
+void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
 {
     // PSMove output is in the following Bayer format (GRBG):
     //
@@ -53,10 +67,10 @@ void FrameQueue::DebayerGray(int frame_width, int frame_height, const uint8_t* i
     //
     // This is the normal Bayer pattern shifted left one place.
 
-    int source_stride = frame_width;
-    const uint8_t* source_row = inBayer; // Start at first bayer pixel
-    int dest_stride = frame_width;
-    uint8_t* dest_row = outBuffer + dest_stride + 1; // We start outputting
+    int source_stride = W;
+    const uint8_t* source_row = input; // Start at first bayer pixel
+    int dest_stride = W;
+    uint8_t* dest_row = buf + dest_stride + 1; // We start outputting
     // at the second pixel
     // of the second row's
     // G component
@@ -65,7 +79,7 @@ void FrameQueue::DebayerGray(int frame_width, int frame_height, const uint8_t* i
     // Fill rows 1 to height-2 of the destination buffer. First and last row
     // are filled separately (they are copied from the second row and
     // second-to-last rows respectively)
-    for (int y = 0; y < frame_height - 2;
+    for (int y = 0; y < H - 2;
          source_row += source_stride, dest_row += dest_stride, ++y)
     {
         const uint8_t* source = source_row;
@@ -155,7 +169,7 @@ void FrameQueue::DebayerGray(int frame_width, int frame_height, const uint8_t* i
         // Fill last pixel of row (copy second-to-last pixel). Note: dest row
         // starts at the *second* pixel of the row, so dest_row + (width-2)
         // * num_output_channels puts us at the last pixel of the row
-        uint8_t* last_pixel = dest_row + (frame_width - 2);
+        uint8_t* last_pixel = dest_row + (W - 2);
         uint8_t* second_to_last_pixel = last_pixel - 1;
         last_pixel[0] = second_to_last_pixel[0];
     }
@@ -163,17 +177,12 @@ void FrameQueue::DebayerGray(int frame_width, int frame_height, const uint8_t* i
     // Fill first & last row
     for (int i = 0; i < dest_stride; i++)
     {
-        outBuffer[i] = outBuffer[i + dest_stride];
-        outBuffer[i + (frame_height - 1) * dest_stride] =
-            outBuffer[i + (frame_height - 2) * dest_stride];
+        buf[i] = buf[i + dest_stride];
+        buf[i + (H - 1) * dest_stride] = buf[i + (H - 2) * dest_stride];
     }
 }
 
-void FrameQueue::DebayerRGB(int frame_width,
-                            int frame_height,
-                            const uint8_t* inBayer,
-                            uint8_t* outBuffer,
-                            bool inBGR)
+void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, bool inBGR)
 {
     // PSMove output is in the following Bayer format (GRBG):
     //
@@ -185,18 +194,18 @@ void FrameQueue::DebayerRGB(int frame_width,
     // This is the normal Bayer pattern shifted left one place.
 
     int num_output_channels = 3;
-    int source_stride = frame_width;
-    const uint8_t* source_row = inBayer; // Start at first bayer pixel
-    int dest_stride = frame_width * num_output_channels;
+    int source_stride = W;
+    const uint8_t* source_row = input; // Start at first bayer pixel
+    int dest_stride = W * num_output_channels;
     // We start outputting at the second pixel of the
-    uint8_t* dest_row = outBuffer + dest_stride + num_output_channels + 1;
+    uint8_t* dest_row = buf + dest_stride + num_output_channels + 1;
     // second row's G component
     int swap_br = inBGR ? 1 : -1;
 
     // Fill rows 1 to height-2 of the destination buffer. First and last row
     // are filled separately (they are copied from the second row and
     // second-to-last rows respectively)
-    for (int y = 0; y < frame_height - 2;
+    for (int y = 0; y < H - 2;
          source_row += source_stride, dest_row += dest_stride, ++y)
     {
         const uint8_t* source = source_row;
@@ -290,7 +299,7 @@ void FrameQueue::DebayerRGB(int frame_width,
         // Fill last pixel of row (copy second-to-last pixel). Note: dest row
         // starts at the *second* pixel of the row, so dest_row + (width-2)
         // * num_output_channels puts us at the last pixel of the row
-        uint8_t* last_pixel = dest_row + (frame_width - 2) * num_output_channels;
+        uint8_t* last_pixel = dest_row + (W - 2) * num_output_channels;
         uint8_t* second_to_last_pixel = last_pixel - num_output_channels;
 
         last_pixel[-1 * swap_br] = second_to_last_pixel[-1 * swap_br];
@@ -301,45 +310,37 @@ void FrameQueue::DebayerRGB(int frame_width,
     // Fill first & last row
     for (int i = 0; i < dest_stride; i++)
     {
-        outBuffer[i] = outBuffer[i + dest_stride];
-        outBuffer[i + (frame_height - 1) * dest_stride] =
-            outBuffer[i + (frame_height - 2) * dest_stride];
+        buf[i] = buf[i + dest_stride];
+        buf[i + (H - 1) * dest_stride] = buf[i + (H - 2) * dest_stride];
     }
 }
 
-bool FrameQueue::Dequeue(uint8_t* new_frame, int frame_width, int frame_height, EOutputFormat outputFormat)
+bool frame_queue::dequeue(uint8_t* dest, int W, int H, format fmt)
 {
-    std::unique_lock<std::mutex> lock(mutex);
+    assert(size_ != UINT_MAX);
 
+    std::unique_lock<std::mutex> lock(mutex_);
     using namespace std::chrono_literals;
 
     // If there is no data in the buffer, wait until data becomes available
-    bool status = empty_condition.wait_for(lock, 30ms, [this]() { return available != 0; });
+    bool status = notify_frame_.wait_for(lock, 30ms, [this]() { return available_ != 0; });
     if (!status)
         return false;
 
     // Copy from internal buffer
-    uint8_t* source = frame_buffer.data() + frame_size * tail;
+    uint8_t* source = buffer_.data() + size_ * tail_;
 
-    if (outputFormat == EOutputFormat::Bayer)
-    {
-        memcpy(new_frame, source, frame_size);
-    }
-    else if (outputFormat == EOutputFormat::BGR ||
-             outputFormat == EOutputFormat::RGB)
-    {
-        DebayerRGB(frame_width, frame_height, source, new_frame,
-                   outputFormat == EOutputFormat::BGR);
-    }
-    else if (outputFormat == EOutputFormat::Gray)
-    {
-        DebayerGray(frame_width, frame_height, source, new_frame);
-    }
+    if (fmt == format::Bayer)
+        memcpy(dest, source, size_);
+    else if (fmt == format::BGR || fmt == format::RGB)
+        debayer_rgb(W, H, source, dest, fmt == format::BGR);
+    else if (fmt == format::Gray)
+        debayer_gray(W, H, source, dest);
     // Update tail and available count
-    tail = (tail + 1) % BUF_FRAME_CNT;
-    available--;
+    tail_ = (tail_ + 1) % max_buffered_frames;
+    available_--;
 
     return true;
 }
 
-}
+} // ns ps3eye

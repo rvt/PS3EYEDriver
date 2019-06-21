@@ -2,16 +2,14 @@
 #include "mgr.hpp"
 
 #include <algorithm>
+#include <optional>
 
 namespace ps3eye {
-
-URBDesc::URBDesc() = default;
-
-static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr);
+urb_descriptor::urb_descriptor() = default;
 
 static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
 {
-    URBDesc* urb = reinterpret_cast<URBDesc*>(xfr->user_data);
+    urb_descriptor* urb = reinterpret_cast<urb_descriptor*>(xfr->user_data);
     enum libusb_transfer_status status = xfr->status;
 
     if (status != LIBUSB_TRANSFER_COMPLETED)
@@ -44,9 +42,9 @@ static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
  */
 static uint8_t find_ep(struct libusb_device* device)
 {
-    const struct libusb_interface_descriptor* altsetting = NULL;
+    const struct libusb_interface_descriptor* altsetting = nullptr;
     const struct libusb_endpoint_descriptor* ep;
-    struct libusb_config_descriptor* config = NULL;
+    struct libusb_config_descriptor* config = nullptr;
     int i;
     uint8_t ep_addr = 0;
 
@@ -82,24 +80,23 @@ static uint8_t find_ep(struct libusb_device* device)
     return ep_addr;
 }
 
-bool URBDesc::start_transfers(libusb_device_handle* handle, uint32_t curr_frame_size)
+bool urb_descriptor::start_transfers(libusb_device_handle* handle, uint32_t frame_size_)
 {
     // Initialize the frame queue
-    frame_size = curr_frame_size;
-    frame_queue = new FrameQueue(frame_size);
+    frame_size = frame_size_;
+    queue.init(frame_size);
 
     // Initialize the current frame pointer to the start of the buffer; it
     // will be updated as frames are completed and pushed onto the frame queue
-    cur_frame_start = frame_queue->GetFrameBufferStart();
-    cur_frame_data_len = 0;
+    cur_frame_start = queue.buffer();
+    frame_data_len = 0;
 
     // Find the bulk transfer endpoint
     uint8_t bulk_endpoint = find_ep(libusb_get_device(handle));
     libusb_clear_halt(handle, bulk_endpoint);
 
     // Allocate the transfer buffer
-    transfer_buffer = (uint8_t*)malloc(TRANSFER_SIZE * NUM_TRANSFERS);
-    memset(transfer_buffer, 0, TRANSFER_SIZE * NUM_TRANSFERS);
+    memset(transfer_buffer.data(), 0, TRANSFER_SIZE * NUM_TRANSFERS);
 
     int res = 0;
     for (int index = 0; index < NUM_TRANSFERS; ++index)
@@ -107,7 +104,7 @@ bool URBDesc::start_transfers(libusb_device_handle* handle, uint32_t curr_frame_
         // Create & submit the transfer
         xfr[index] = libusb_alloc_transfer(0);
         libusb_fill_bulk_transfer(xfr[index], handle, bulk_endpoint,
-                                  transfer_buffer + index * TRANSFER_SIZE,
+                                  transfer_buffer.data() + index * TRANSFER_SIZE,
                                   TRANSFER_SIZE, transfer_completed_callback,
                                   reinterpret_cast<void*>(this), 0);
 
@@ -119,12 +116,12 @@ bool URBDesc::start_transfers(libusb_device_handle* handle, uint32_t curr_frame_
     last_pts = 0;
     last_fid = 0;
 
-    USBMgr::instance()->cameraStarted();
+    USBMgr::instance().cameraStarted();
 
     return res == 0;
 }
 
-void URBDesc::close_transfers()
+void urb_descriptor::close_transfers()
 {
     std::unique_lock<std::mutex> lock(num_active_transfers_mutex);
     if (num_active_transfers == 0) return;
@@ -147,27 +144,21 @@ void URBDesc::close_transfers()
         xfr[index] = nullptr;
     }
 
-    USBMgr::instance()->cameraStopped();
-
-    free(transfer_buffer);
-    transfer_buffer = nullptr;
-
-    delete frame_queue;
-    frame_queue = nullptr;
+    USBMgr::instance().cameraStopped();
 }
 
-void URBDesc::transfer_canceled()
+void urb_descriptor::transfer_canceled()
 {
     std::lock_guard<std::mutex> lock(num_active_transfers_mutex);
     --num_active_transfers;
     num_active_transfers_condition.notify_one();
 }
 
-void URBDesc::frame_add(enum gspca_packet_type packet_type, const uint8_t* data, int len)
+void urb_descriptor::frame_add(enum gspca_packet_type packet_type, const uint8_t* data, int len)
 {
     if (packet_type == FIRST_PACKET)
     {
-        cur_frame_data_len = 0;
+        frame_data_len = 0;
     }
     else
     {
@@ -177,7 +168,7 @@ void URBDesc::frame_add(enum gspca_packet_type packet_type, const uint8_t* data,
             if (packet_type == LAST_PACKET)
             {
                 last_packet_type = packet_type;
-                cur_frame_data_len = 0;
+                frame_data_len = 0;
             }
             return;
         case LAST_PACKET:
@@ -190,15 +181,15 @@ void URBDesc::frame_add(enum gspca_packet_type packet_type, const uint8_t* data,
     /* append the packet to the frame buffer */
     if (len > 0)
     {
-        if (cur_frame_data_len + (unsigned)len > frame_size)
+        if (frame_data_len + (unsigned)len > frame_size)
         {
             packet_type = DISCARD_PACKET;
-            cur_frame_data_len = 0;
+            frame_data_len = 0;
         }
         else
         {
-            memcpy(cur_frame_start + cur_frame_data_len, data, (unsigned)len);
-            cur_frame_data_len += (unsigned)len;
+            memcpy(cur_frame_start + frame_data_len, data, (unsigned)len);
+            frame_data_len += (unsigned)len;
         }
     }
 
@@ -206,13 +197,13 @@ void URBDesc::frame_add(enum gspca_packet_type packet_type, const uint8_t* data,
 
     if (packet_type == LAST_PACKET)
     {
-        cur_frame_data_len = 0;
-        cur_frame_start = frame_queue->Enqueue();
+        frame_data_len = 0;
+        cur_frame_start = queue.enqueue();
         // debug("frame completed %d\n", frame_complete_ind);
     }
 }
 
-void URBDesc::pkt_scan(uint8_t* data, int len)
+void urb_descriptor::pkt_scan(uint8_t* data, int len)
 {
     uint32_t this_pts;
     uint16_t this_fid;
@@ -269,7 +260,7 @@ void URBDesc::pkt_scan(uint8_t* data, int len)
         else if (data[1] & UVC_STREAM_EOF)
         {
             last_pts = 0;
-            if (cur_frame_data_len + (unsigned)len - 12 != frame_size)
+            if (frame_data_len + (unsigned)len - 12 != frame_size)
             {
                 goto discard;
             }

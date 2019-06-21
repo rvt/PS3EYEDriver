@@ -3,11 +3,10 @@
 #include "queue.hpp"
 #include "internal.hpp"
 
-#include <memory>
 #include <mutex>
 #include <condition_variable>
 
-#include "libusb.h"
+#include <libusb.h>
 
 namespace ps3eye {
 
@@ -20,38 +19,38 @@ enum gspca_packet_type
     LAST_PACKET
 };
 
-// URBDesc
+// urb_descriptor
 
-struct URBDesc
+struct urb_descriptor final
 {
-    URBDesc();
+    urb_descriptor();
 
-    ~URBDesc()
+    ~urb_descriptor()
     {
-        ps3eye_debug("URBDesc destructor\n");
+        ps3eye_debug("urb_descriptor destructor\n");
         close_transfers();
     }
 
-    bool start_transfers(libusb_device_handle* handle, uint32_t curr_frame_size);
+    bool start_transfers(libusb_device_handle* handle, uint32_t frame_size);
     void close_transfers();
     void transfer_canceled();
     void frame_add(enum gspca_packet_type packet_type, const uint8_t* data, int len);
     void pkt_scan(uint8_t* data, int len);
 
-    uint8_t num_active_transfers = 0;
     std::mutex num_active_transfers_mutex;
     std::condition_variable num_active_transfers_condition;
 
-    enum gspca_packet_type last_packet_type = DISCARD_PACKET;
-    uint32_t last_pts = 0;
-    uint16_t last_fid = 0;
-    libusb_transfer* xfr[NUM_TRANSFERS];
-
-    uint8_t* transfer_buffer = nullptr;
+    libusb_transfer* xfr[NUM_TRANSFERS] {};
+    frame_queue queue;
+    std::array<uint8_t, TRANSFER_SIZE * NUM_TRANSFERS> transfer_buffer {};
     uint8_t* cur_frame_start = nullptr;
-    uint32_t cur_frame_data_len = 0;
+
+    uint32_t frame_data_len = 0;
     uint32_t frame_size = 0;
-    FrameQueue* frame_queue = nullptr;
+    uint32_t last_pts = 0;
+    gspca_packet_type last_packet_type = DISCARD_PACKET;
+    uint16_t last_fid = 0;
+    uint8_t num_active_transfers = 0;
 };
 
 } // ns ps3eye

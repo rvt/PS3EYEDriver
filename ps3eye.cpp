@@ -1,5 +1,5 @@
 // source code from https://github.com/inspirit/PS3EYEDriver
-#include "ps3eye.h"
+#include "ps3eye.hpp"
 #include "urb.hpp"
 #include "mgr.hpp"
 #include "internal.hpp"
@@ -9,6 +9,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <chrono>
 #include <vector>
 #include <algorithm>
 #include <iterator>
@@ -22,6 +23,8 @@
 
 namespace ps3eye
 {
+
+using namespace std::chrono_literals;
 
 enum : uint8_t {
     OV534_REG_ADDRESS = 0xf1, /* sensor address */
@@ -187,25 +190,23 @@ static const uint8_t sensor_start_qvga[][2] = {
     { 0x65, 0x2f },
 };
 
-PS3EYECam::PS3EYECam(libusb_device* device)
+camera::camera(libusb_device* device)
 {
     device_ = device;
-    mgrPtr = USBMgr::instance();
-    urb = std::make_shared<URBDesc>();
 }
 
-PS3EYECam::~PS3EYECam()
+camera::~camera()
 {
     stop();
     release();
 }
 
-void PS3EYECam::release()
+void camera::release()
 {
     if (handle_) close_usb();
 }
 
-bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate, EOutputFormat outputFormat)
+bool camera::init(int width, int height, int framerate, format fmt)
 {
     uint16_t sensor_id;
 
@@ -213,9 +214,7 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
     if (!handle_)
     {
         if (!open_usb())
-        {
             return false;
-        }
     }
 
     // find best cam mode
@@ -229,36 +228,23 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
         frame_width = 320;
         frame_height = 240;
     }
-    frame_rate = ov534_set_frame_rate(desiredFrameRate, true);
-    frame_output_format = outputFormat;
+    frame_rate = ov534_set_frame_rate(framerate, true);
+    frame_output_format = fmt;
     //
 
     /* reset bridge */
     ov534_reg_write(0xe7, 0x3a);
     ov534_reg_write(0xe0, 0x08);
 
-#ifdef _MSC_VER
-    Sleep(100);
-#else
-    {
-        struct timespec ts { 0, 100000000 };
-        nanosleep(&ts, NULL);
-    }
-#endif
+    std::this_thread::sleep_for(100ms);
 
     /* initialize the sensor address */
     ov534_reg_write(OV534_REG_ADDRESS, 0x42);
 
     /* reset sensor */
     sccb_reg_write(0x12, 0x80);
-#ifdef _MSC_VER
-    Sleep(10);
-#else
-    {
-        const struct timespec ts { 0, 10000000 };
-        nanosleep(&ts, NULL);
-    }
-#endif
+
+    std::this_thread::sleep_for(100ms);
 
     /* probe the sensor */
     sccb_reg_read(0x0a);
@@ -277,9 +263,10 @@ bool PS3EYECam::init(uint32_t width, uint32_t height, uint16_t desiredFrameRate,
     return true;
 }
 
-void PS3EYECam::start()
+void camera::start()
 {
-    if (is_streaming) return;
+    if (streaming_)
+        return;
 
     if (frame_width == 320)
     { /* 320x240 */
@@ -294,75 +281,73 @@ void PS3EYECam::start()
 
     ov534_set_frame_rate(frame_rate);
 
-    setAutogain(autogain);
-    setAutoWhiteBalance(awb);
-    setGain(gain);
-    setHue(hue);
-    setExposure(exposure);
-    setBrightness(brightness);
-    setContrast(contrast);
-    setSharpness(sharpness);
-    setRedBalance(redblc);
-    setBlueBalance(blueblc);
-    setGreenBalance(greenblc);
-    setFlip(flip_h, flip_v);
+    set_auto_gain(auto_gain_);
+    set_awb(awb_);
+    set_gain(gain_);
+    set_hue(hue_);
+    set_exposure(exposure_);
+    set_brightness(brightness_);
+    set_contrast(contrast_);
+    set_sharpness(sharpness_);
+    set_red_balance(redblc_);
+    set_blue_balance(blueblc_);
+    set_green_balance(greenblc_);
+    set_flip_status(flip_h_, flip_v_);
 
     ov534_set_led(1);
     ov534_reg_write(0xe0, 0x00); // start stream
 
     // init and start urb
-    urb->start_transfers(handle_, frame_width * frame_height);
-    is_streaming = true;
+    urb.start_transfers(handle_, frame_width * frame_height);
+    streaming_ = true;
 }
 
-void PS3EYECam::stop()
+void camera::stop()
 {
-    if (!is_streaming) return;
+    if (!streaming_) return;
 
     /* stop streaming data */
     ov534_reg_write(0xe0, 0x09);
     ov534_set_led(0);
 
     // close urb
-    urb->close_transfers();
+    urb.close_transfers();
 
-    is_streaming = false;
+    streaming_ = false;
 }
 
 #define MAX_USB_DEVICE_PORT_PATH 7
 
-bool PS3EYECam::getUSBPortPath(char* out_identifier, size_t max_identifier_length) const
+bool camera::usb_port(char* buf, unsigned sz) const
 {
     bool success = false;
 
-    if (isInitialized())
+    if (is_initialized())
     {
         uint8_t port_numbers[MAX_USB_DEVICE_PORT_PATH];
 
-        memset(out_identifier, 0, max_identifier_length);
-
+        memset(buf, 0, sz);
         memset(port_numbers, 0, sizeof(port_numbers));
-        int port_count =
-            libusb_get_port_numbers(device_, port_numbers, MAX_USB_DEVICE_PORT_PATH);
+
+        int cnt = libusb_get_port_numbers(device_, port_numbers, MAX_USB_DEVICE_PORT_PATH);
         int bus_id = libusb_get_bus_number(device_);
 
-        snprintf(out_identifier, max_identifier_length, "b%d", bus_id);
-        if (port_count > 0)
+        snprintf(buf, sz, "b%d", bus_id);
+        if (cnt > 0)
         {
             success = true;
 
-            for (int port_index = 0; port_index < port_count; ++port_index)
+            for (int i = 0; i < cnt; i++)
             {
-                uint8_t port_number = port_numbers[port_index];
+                uint8_t port_number = port_numbers[i];
                 char port_string[8];
 
                 snprintf(port_string, sizeof(port_string),
-                         (port_index == 0) ? "_p%d" : ".%d", port_number);
-                port_string[sizeof(port_string) - 1] = '0';
+                         (i == 0) ? "_p%d" : ".%d", port_number);
 
-                if (strlen(out_identifier) + strlen(port_string) + 1 <= max_identifier_length)
+                if (strlen(buf) + strlen(port_string) + 1 <= sz)
                 {
-                    std::strcat(out_identifier, port_string);
+                    std::strcat(buf, port_string);
                 }
                 else
                 {
@@ -376,25 +361,25 @@ bool PS3EYECam::getUSBPortPath(char* out_identifier, size_t max_identifier_lengt
     return success;
 }
 
-uint32_t PS3EYECam::getOutputBytesPerPixel() const
+int camera::bytes_per_pixel() const
 {
-    if (frame_output_format == EOutputFormat::Bayer)
+    if (frame_output_format == format::Bayer)
         return 1;
-    else if (frame_output_format == EOutputFormat::BGR)
+    else if (frame_output_format == format::BGR)
         return 3;
-    else if (frame_output_format == EOutputFormat::RGB)
+    else if (frame_output_format == format::RGB)
         return 3;
-    else if (frame_output_format == EOutputFormat::Gray)
+    else if (frame_output_format == format::Gray)
         return 1;
     return 0;
 }
 
-void PS3EYECam::getFrame(uint8_t* frame)
+bool camera::get_frame(uint8_t* frame)
 {
-    (void)urb->frame_queue->Dequeue(frame, frame_width, frame_height, frame_output_format);
+    return urb.queue.dequeue(frame, frame_width, frame_height, frame_output_format);
 }
 
-bool PS3EYECam::open_usb()
+bool camera::open_usb()
 {
     // open, set first config and claim interface
     int res = libusb_open(device_, &handle_);
@@ -421,21 +406,21 @@ bool PS3EYECam::open_usb()
     return true;
 }
 
-void PS3EYECam::close_usb()
+void camera::close_usb()
 {
     ps3eye_debug("closing device\n");
     libusb_release_interface(handle_, 0);
     libusb_attach_kernel_driver(handle_, 0);
     libusb_close(handle_);
     libusb_unref_device(device_);
-    handle_ = NULL;
-    device_ = NULL;
+    handle_ = nullptr;
+    device_ = nullptr;
     ps3eye_debug("device closed\n");
 }
 
 /* Two bits control LED: 0x21 bit 7 and 0x23 bit 7.
  * (direction and output)? */
-void PS3EYECam::ov534_set_led(int status)
+void camera::ov534_set_led(int status)
 {
     uint8_t data;
 
@@ -462,21 +447,19 @@ void PS3EYECam::ov534_set_led(int status)
 }
 
 /* validate frame rate and (if not dry run) set it */
-uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
+int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
 {
-    if (frame_rate < 2)
-        frame_rate = 60;
-
-    int i;
     struct rate_s
     {
-        uint16_t fps;
+        int fps;
         uint8_t r11;
         uint8_t r0d;
         uint8_t re5;
     };
+
     const struct rate_s* r;
-    static const struct rate_s rate_0[] = {
+
+    static constexpr struct rate_s rate_0[] = {
         /* 640x480 */
         { 83, 0x01, 0xc1, 0x02 }, /* 83 FPS: video is partly corrupt */
         { 75, 0x01, 0x81, 0x02 }, /* 75 FPS or below: video is valid */
@@ -493,7 +476,8 @@ uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
         {  3, 0x06, 0x01, 0x02 },
         {  2, 0x09, 0x01, 0x02 },
     };
-    static const struct rate_s rate_1[] = {
+
+    static constexpr struct rate_s rate_1[] = {
         /* 320x240 */
         { 290, 0x00, 0xc1, 0x04 },
         { 205, 0x01, 0xc1, 0x02 }, /* 205 FPS or above: video is partly corrupt */
@@ -518,6 +502,8 @@ uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
         {   3, 0x09, 0x01, 0x04 },
         {   2, 0x18, 0x01, 0x02 },
     };
+
+    int i;
 
     if (frame_width == 640)
     {
@@ -546,7 +532,7 @@ uint16_t PS3EYECam::ov534_set_frame_rate(uint16_t frame_rate, bool dry_run)
     return r->fps;
 }
 
-void PS3EYECam::ov534_reg_write(uint16_t reg, uint8_t val)
+void camera::ov534_reg_write(uint16_t reg, uint8_t val)
 {
     int ret;
 
@@ -561,7 +547,7 @@ void PS3EYECam::ov534_reg_write(uint16_t reg, uint8_t val)
     }
 }
 
-uint8_t PS3EYECam::ov534_reg_read(uint16_t reg)
+uint8_t camera::ov534_reg_read(uint16_t reg)
 {
     int ret;
 
@@ -576,7 +562,7 @@ uint8_t PS3EYECam::ov534_reg_read(uint16_t reg)
     return usb_buf[0];
 }
 
-int PS3EYECam::sccb_check_status()
+int camera::sccb_check_status()
 {
     uint8_t data;
     int i;
@@ -600,7 +586,7 @@ int PS3EYECam::sccb_check_status()
     return 0;
 }
 
-void PS3EYECam::sccb_reg_write(uint8_t reg, uint8_t val)
+void camera::sccb_reg_write(uint8_t reg, uint8_t val)
 {
     // debug("reg: 0x%02x, val: 0x%02x", reg, val);
     ov534_reg_write(OV534_REG_SUBADDR, reg);
@@ -613,7 +599,7 @@ void PS3EYECam::sccb_reg_write(uint8_t reg, uint8_t val)
     }
 }
 
-uint8_t PS3EYECam::sccb_reg_read(uint16_t reg)
+uint8_t camera::sccb_reg_read(uint16_t reg)
 {
     ov534_reg_write(OV534_REG_SUBADDR, (uint8_t)reg);
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_WRITE_2);
@@ -631,7 +617,7 @@ uint8_t PS3EYECam::sccb_reg_read(uint16_t reg)
     return ov534_reg_read(OV534_REG_READ);
 }
 /* output a bridge sequence (reg - val) */
-void PS3EYECam::reg_w_array(const uint8_t (*data)[2], int len)
+void camera::reg_w_array(const uint8_t (*data)[2], int len)
 {
     while (--len >= 0)
     {
@@ -641,7 +627,7 @@ void PS3EYECam::reg_w_array(const uint8_t (*data)[2], int len)
 }
 
 /* output a sensor sequence (reg - val) */
-void PS3EYECam::sccb_w_array(const uint8_t (*data)[2], int len)
+void camera::sccb_w_array(const uint8_t (*data)[2], int len)
 {
     while (--len >= 0)
     {
@@ -658,25 +644,29 @@ void PS3EYECam::sccb_w_array(const uint8_t (*data)[2], int len)
     }
 }
 
-bool PS3EYECam::devicesEnumerated = false;
-std::vector<std::shared_ptr<PS3EYECam>> PS3EYECam::devices;
+//bool camera::enumerated = false;
+//std::vector<std::shared_ptr<camera>> camera::devices;
 
-const std::vector<std::shared_ptr<PS3EYECam>>& PS3EYECam::getDevices(bool forceRefresh)
+std::vector<std::shared_ptr<camera>> camera::list_devices()
 {
-    if (devicesEnumerated && (!forceRefresh)) return devices;
+#if 0
+    if (enumerated && (!forceRefresh)) return devices;
 
     devices.clear();
 
     //USBMgr::instance()->sTotalDevices =
-    USBMgr::instance()->listDevices(devices);
+    devices = USBMgr::instance()->list_devices();
 
-    devicesEnumerated = true;
+    enumerated = true;
     return devices;
+#else
+    return USBMgr::instance().list_devices();
+#endif
 }
 
-void PS3EYECam::setAutogain(bool val)
+void camera::set_auto_gain(bool val)
 {
-    autogain = val;
+    auto_gain_ = val;
     if (val)
     {
         sccb_reg_write(0x13, 0xf7); // AGC,AEC,AWB ON
@@ -687,14 +677,14 @@ void PS3EYECam::setAutogain(bool val)
         sccb_reg_write(0x13, 0xf0); // AGC,AEC,AWB OFF
         sccb_reg_write(0x64, sccb_reg_read(0x64) & 0xFC);
 
-        setGain(gain);
-        setExposure(exposure);
+        set_gain(gain_);
+        set_exposure(exposure_);
     }
 }
 
-void PS3EYECam::setAutoWhiteBalance(bool val)
+void camera::set_awb(bool val)
 {
-    awb = val;
+    awb_ = val;
     if (val)
     {
         sccb_reg_write(0x63, 0xe0); // AWB ON
@@ -705,81 +695,76 @@ void PS3EYECam::setAutoWhiteBalance(bool val)
     }
 }
 
-bool PS3EYECam::setFrameRate(int val)
+bool camera::set_framerate(int val)
 {
-    if (is_streaming) return false;
+    if (streaming_) return false;
     frame_rate = ov534_set_frame_rate((uint8_t)std::clamp(val, 0, 512), true);
     return true;
 }
 
-void PS3EYECam::setTestPattern(bool enable)
+void camera::set_test_pattern_status(bool enable)
 {
-    testPattern = enable;
+    test_pattern_ = enable;
     uint8_t val = sccb_reg_read(0x0C);
     val &= ~0b00000001;
-    if (testPattern) val |= 0b00000001; // 0x80;
+    if (test_pattern_) val |= 0b00000001; // 0x80;
     sccb_reg_write(0x0C, val);
 }
 
-bool PS3EYECam::isInitialized() const
+void camera::set_exposure(int val)
 {
-    return device_ && handle_;
+    exposure_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x08, exposure_ >> 7);
+    sccb_reg_write(0x10, uint8_t(exposure_ << 1));
 }
 
-void PS3EYECam::setExposure(int val)
+void camera::set_sharpness(int val)
 {
-    exposure = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x08, exposure >> 7);
-    sccb_reg_write(0x10, uint8_t(exposure << 1));
+    sharpness_ = (uint8_t)std::clamp(val, 0, 63);
+    sccb_reg_write(0x91, sharpness_); // vga noise
+    sccb_reg_write(0x8E, sharpness_); // qvga noise
 }
 
-void PS3EYECam::setSharpness(int val)
+void camera::set_contrast(int val)
 {
-    sharpness = (uint8_t)std::clamp(val, 0, 63);
-    sccb_reg_write(0x91, sharpness); // vga noise
-    sccb_reg_write(0x8E, sharpness); // qvga noise
+    contrast_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x9C, contrast_);
 }
 
-void PS3EYECam::setContrast(int val)
+void camera::set_brightness(int val)
 {
-    contrast = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x9C, contrast);
+    brightness_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x9B, brightness_);
 }
 
-void PS3EYECam::setBrightness(int val)
+void camera::set_hue(int val)
 {
-    brightness = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x9B, brightness);
+    hue_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x01, hue_);
 }
 
-void PS3EYECam::setHue(int val)
+void camera::set_red_balance(int val)
 {
-    hue = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x01, hue);
+    redblc_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x43, redblc_);
 }
 
-void PS3EYECam::setRedBalance(int val)
+void camera::set_blue_balance(int val)
 {
-    redblc = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x43, redblc);
+    blueblc_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x42, blueblc_);
 }
 
-void PS3EYECam::setBlueBalance(int val)
+void camera::set_green_balance(int val)
 {
-    blueblc = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x42, blueblc);
+    greenblc_ = (uint8_t)std::clamp(val, 0, 255);
+    sccb_reg_write(0x44, greenblc_);
 }
 
-void PS3EYECam::setGreenBalance(int val)
+void camera::set_flip_status(bool horizontal, bool vertical)
 {
-    greenblc = (uint8_t)std::clamp(val, 0, 255);
-    sccb_reg_write(0x44, greenblc);
-}
-
-void PS3EYECam::setFlip(bool horizontal, bool vertical)
-{
-    flip_h = horizontal;
-    flip_v = vertical;
+    flip_h_ = horizontal;
+    flip_v_ = vertical;
     uint8_t val = sccb_reg_read(0x0c);
     val &= ~0xc0;
     if (!horizontal) val |= 0x40;
@@ -787,10 +772,10 @@ void PS3EYECam::setFlip(bool horizontal, bool vertical)
     sccb_reg_write(0x0c, val);
 }
 
-void PS3EYECam::setGain(int val)
+void camera::set_gain(int val)
 {
-    gain = (uint8_t)std::clamp(val, 0, 63);
-    val = gain;
+    gain_ = (uint8_t)std::clamp(val, 0, 63);
+    val = gain_;
     switch (val & 0x30)
     {
     case 0x00:
@@ -809,7 +794,7 @@ void PS3EYECam::setGain(int val)
         val |= 0xF0;
         break;
     }
-    sccb_reg_write(0x00, val);
+    sccb_reg_write(0x00, (uint8_t)val);
 }
 
 } // namespace ps3eye

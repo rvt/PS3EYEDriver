@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory>
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -9,15 +8,15 @@ struct libusb_context;
 
 namespace ps3eye {
 
-struct PS3EYECam;
+struct camera;
 
 struct USBMgr
 {
     USBMgr();
     ~USBMgr();
 
-    static std::shared_ptr<USBMgr> instance();
-    int listDevices(std::vector<std::shared_ptr<PS3EYECam>>& list);
+    static USBMgr& instance();
+    std::vector<std::shared_ptr<camera>> list_devices();
     void cameraStarted();
     void cameraStopped();
 

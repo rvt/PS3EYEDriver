@@ -12,7 +12,7 @@ template<typename... xs> inline void ps3eye_debug(const xs&... args) { fprintf(s
 template<typename... xs> inline void ps3eye_debug(const xs&...) {}
 #endif
 
-enum class EOutputFormat
+enum class format
 {
     Bayer, // Output in Bayer. Destination buffer must be width * height bytes
     BGR, // Output in BGR. Destination buffer must be width * height * 3 bytes
@@ -23,7 +23,7 @@ enum class EOutputFormat
 enum {
     TRANSFER_SIZE = 65536,
     NUM_TRANSFERS = 5,
-    BUF_FRAME_CNT = 4,
+    max_buffered_frames = 4,
     VENDOR_ID = 0x1415,
     PRODUCT_ID = 0x2000,
 };

@@ -60,11 +60,13 @@ struct camera
     void set_blue_balance(int val);
     constexpr uint8_t green_balance() const { return greenblc_; }
     void set_green_balance(int val);
+    constexpr int saturation() const { return saturation_; }
+    void set_saturation(int val);
     constexpr std::pair<bool, bool> flip_status() { return { flip_h_, flip_v_ }; }
     void set_flip_status(bool horizontal = false, bool vertical = false);
     constexpr bool test_pattern_status() const { return test_pattern_; }
     void set_test_pattern_status(bool enable);
-    constexpr int framerate() const { return frame_rate_; }
+    constexpr int framerate() const { return framerate_; }
     bool set_framerate(int val);
 
     constexpr bool is_open() const { return streaming_; }
@@ -125,6 +127,7 @@ private:
     val<> blueblc_ = 128;    // 0 <-> 255
     val<> redblc_ = 128;     // 0 <-> 255
     val<> greenblc_ = 128;   // 0 <-> 255
+    val<6> saturation_ = 3;
 
     bool auto_gain_ = false;
     bool awb_ = false;
@@ -137,7 +140,7 @@ private:
     //static std::vector<std::shared_ptr<camera>> devices;
 
     resolution resolution_;
-    int frame_rate_ = 0;
+    int framerate_ = 0;
     format format_ = format::BGR;
 
     // usb stuff

@@ -7,8 +7,6 @@ if(NOT WIN32)
     link_libraries(-pthread)
 endif()
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
-
 if(NOT MSVC)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(libusb "libusb-1.0" QUIET)
@@ -40,6 +38,7 @@ add_executable(ps3eye-mode-test "mode-test.cxx")
 target_link_libraries(ps3eye-mode-test ps3eye-driver)
 
 if(TARGET ps3eye-driver)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
     find_package(SDL2 QUIET)
 
     if(SDL2_FOUND)

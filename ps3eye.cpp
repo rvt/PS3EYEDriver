@@ -13,6 +13,7 @@
 #include <vector>
 #include <algorithm>
 #include <iterator>
+#include <chrono>
 
 #ifdef _MSC_VER
 #   pragma warning(disable : 4200) // zero-length arrays
@@ -215,8 +216,6 @@ bool camera::init(resolution res, int framerate, format fmt)
     stop();
     //release();
 
-    uint16_t sensor_id;
-
     // open usb device so we can setup and go
     if (!handle_)
     {
@@ -226,14 +225,14 @@ bool camera::init(resolution res, int framerate, format fmt)
 
     resolution_ = res;
 
-    frame_rate_ = ov534_set_frame_rate(framerate, true);
+    framerate_ = ov534_set_frame_rate(framerate, true);
     format_ = fmt;
 
     /* reset bridge */
     ov534_reg_write(0xe7, 0x3a);
     ov534_reg_write(0xe0, 0x08);
 
-    std::this_thread::sleep_for(100ms);
+    std::this_thread::sleep_for(10ms);
 
     /* initialize the sensor address */
     ov534_reg_write(OV534_REG_ADDRESS, 0x42);
@@ -241,14 +240,16 @@ bool camera::init(resolution res, int framerate, format fmt)
     /* reset sensor */
     sccb_reg_write(0x12, 0x80);
 
-    std::this_thread::sleep_for(100ms);
+    std::this_thread::sleep_for(10ms);
 
+#if 0
     /* probe the sensor */
     sccb_reg_read(0x0a);
-    sensor_id = sccb_reg_read(0x0a) << 8;
+    uint16_t sensor_id = sccb_reg_read(0x0a) << 8;
     sccb_reg_read(0x0b);
     sensor_id |= sccb_reg_read(0x0b);
     ps3eye_debug("Sensor ID: %04x\n", sensor_id);
+#endif
 
     /* initialize */
     reg_w_array(ov534_reg_initdata, std::size(ov534_reg_initdata));
@@ -276,7 +277,7 @@ bool camera::start()
         sccb_w_array(sensor_start_vga, std::size(sensor_start_vga));
     }
 
-    ov534_set_frame_rate(frame_rate_);
+    ov534_set_frame_rate(framerate_);
 
     set_auto_gain(auto_gain_);
     set_awb(awb_);
@@ -384,6 +385,7 @@ bool camera::get_frame(uint8_t* frame)
         return false;
 
     auto [ w, h ] = size();
+    using namespace std::chrono_literals;
     return urb.queue.dequeue(frame, w, h, format_);
 }
 
@@ -430,7 +432,7 @@ void camera::ov534_set_led(int status)
 {
     uint8_t data;
 
-    ps3eye_debug("led status: %d\n", status);
+    //ps3eye_debug("led status: %d\n", status);
 
     data = ov534_reg_read(0x21);
     data |= 0x80;
@@ -530,7 +532,6 @@ int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
         ov534_reg_write(0xe5, rate.re5);
     }
 
-    ps3eye_debug("frame_rate: %d\n", rate.fps);
     return rate.fps;
 }
 

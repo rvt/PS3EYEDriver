@@ -33,7 +33,7 @@ bool camera::set_framerate(int val)
 {
     if (streaming_)
         return false;
-    frame_rate_ = ov534_set_frame_rate(val, true);
+    framerate_ = ov534_set_frame_rate(val, true);
     return true;
 }
 
@@ -130,6 +130,13 @@ void camera::set_gain(int val)
         break;
     }
     sccb_reg_write(0x00, (uint8_t)val);
+}
+
+void camera::set_saturation(int val)
+{
+    saturation_ = val;
+    sccb_reg_write(0xa7, saturation_); /* U saturation */
+    sccb_reg_write(0xa8, saturation_); /* V saturation */
 }
 
 } // ns ps3eye::detail

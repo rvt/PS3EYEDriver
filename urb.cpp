@@ -28,12 +28,11 @@ static void LIBUSB_CALL transfer_completed_callback(struct libusb_transfer* xfr)
 
     if (status != LIBUSB_TRANSFER_COMPLETED)
     {
-        ps3eye_debug("transfer status %d\n", status);
-
         urb->transfer_cancelled();
 
         if (status != LIBUSB_TRANSFER_CANCELLED)
         {
+            ps3eye_debug("transfer status %d\n", status);
             urb->close_transfers();
         }
         return;

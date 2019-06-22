@@ -8,31 +8,10 @@
 #include <iostream>
 #include <sstream>
 #include <iterator>
+#include <thread>
+#include <chrono>
 
 #include <SDL.h>
-
-struct context
-{
-    context(ps3eye::resolution res, int fps)
-    {
-        if (hasDevices())
-        {
-            eye = devices[0];
-            running = eye->init(res, fps);
-        }
-        else
-            running = false;
-    }
-
-    bool hasDevices() { return !devices.empty(); }
-
-    std::shared_ptr<ps3eye::camera> eye;
-    std::vector<std::shared_ptr<ps3eye::camera>> devices { ps3eye::list_devices() };
-
-    Uint32 last_ticks = 0;
-    Uint32 last_frames = 0;
-    bool running = true;
-};
 
 static void print_renderer_info(SDL_Renderer* renderer)
 {
@@ -45,21 +24,32 @@ static void run_camera(ps3eye::resolution res, int fps)
 {
     ps3eye::camera::set_debug(true);
 
-    context ctx(res, fps);
-    ctx.running &= ctx.eye->start();
+    auto cameras = ps3eye::list_devices();
 
-    if (!ctx.running)
+    if (cameras.empty())
     {
-        fprintf(stderr, "No PS3 Eye camera connected\n");
+        fprintf(stderr, "no device\n");
         return;
     }
 
-    //ctx.eye->set_flip_status(true); /* mirrored left-right */
+    auto camera = cameras[0];
+    bool running = true;
 
-    auto [ w, h ] = ctx.eye->size();
+    running &= camera->init(res, fps);
+    running &= camera->start();
+
+    if (!running)
+    {
+        fprintf(stderr, "device init failed\n");
+        return;
+    }
+
+    //camera->set_flip_status(true); /* mirrored left-right */
+
+    auto [ w, h ] = camera->size();
 
     char title[256];
-    sprintf(title, "%dx%d@%d\n", w, h, ctx.eye->framerate());
+    sprintf(title, "%dx%d@%dHz\n", w, h, camera->framerate());
 
     SDL_Window* window = SDL_CreateWindow(title,
                                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
@@ -77,12 +67,12 @@ static void run_camera(ps3eye::resolution res, int fps)
         SDL_DestroyWindow(window);
         return;
     }
-    SDL_RenderSetLogicalSize(renderer, ctx.eye->width(), ctx.eye->height());
+    SDL_RenderSetLogicalSize(renderer, camera->width(), camera->height());
     print_renderer_info(renderer);
 
     SDL_Texture* video_tex =
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGR24, SDL_TEXTUREACCESS_STREAMING,
-                          ctx.eye->width(), ctx.eye->height());
+                          camera->width(), camera->height());
 
     if (!video_tex)
     {
@@ -92,58 +82,59 @@ static void run_camera(ps3eye::resolution res, int fps)
         return;
     }
 
-    fprintf(stderr, "camera mode: %dx%d@%d %d\n", w, h, ctx.eye->framerate(), ctx.running);
+    fprintf(stderr, "camera mode: %dx%d@%dHz\n", w, h, camera->framerate());
 
     SDL_Event e;
-    unsigned nframes = 0, bad_frames = 0;
-    while (ctx.running)
+    unsigned last_ticks = 0;
+    unsigned last_frames = 0;
+
+    while (running)
     {
         while (SDL_PollEvent(&e))
         {
             if (e.type == SDL_QUIT ||
                 (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE))
             {
-                ctx.running = false;
+                running = false;
             }
         }
 
         {
-            Uint32 now_ticks = SDL_GetTicks();
+            unsigned now_ticks = SDL_GetTicks();
 
-            ctx.last_frames++;
+            last_frames++;
 
             if (ps3eye::camera::is_debugging() &&
-                now_ticks - ctx.last_ticks > 1000)
+                now_ticks - last_ticks > 1000 * 10)
             {
-                fprintf(stderr, "FPS: %.2f\n", 1000 * ctx.last_frames / double(now_ticks - ctx.last_ticks));
-                ctx.last_ticks = now_ticks;
-                ctx.last_frames = 0;
+                fprintf(stderr, "FPS: %.2f\n", last_frames * 1000 / double(now_ticks - last_ticks));
+                last_ticks = now_ticks;
+                last_frames = 0;
             }
         }
 
         void* video_tex_pixels;
         int pitch;
         SDL_LockTexture(video_tex, nullptr, &video_tex_pixels, &pitch);
-        bool status = ctx.eye->get_frame((uint8_t*)video_tex_pixels);
 
-        if (status)
-            nframes++;
-        else
-            bad_frames++;
+        using namespace std::chrono_literals;
+
+        if (int fps = camera->framerate(); fps > 0 && fps < 60)
+            std::this_thread::sleep_for(1ms * fps/2);
+        bool status = camera->get_frame((uint8_t*)video_tex_pixels);
 
         SDL_UnlockTexture(video_tex);
 
-        SDL_RenderCopy(renderer, video_tex, nullptr, nullptr);
+        if (status)
+            SDL_RenderCopy(renderer, video_tex, nullptr, nullptr);
         SDL_RenderPresent(renderer);
     }
 
-    ctx.eye->stop();
+    camera->stop();
 
     SDL_DestroyTexture(video_tex);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
-
-    fprintf(stderr, "%u frames, %u bad_frames\n", nframes, bad_frames);
 }
 
 int main(int argc, char** argv)

@@ -67,7 +67,7 @@ void usb_manager::stop_xfer_thread()
 
 void usb_manager::xfer_callback()
 {
-    struct timeval tv { 0, 500 * 1000 /* ms */ };
+    struct timeval tv { 0, 100 * 1000 /* ms */ };
 
     while (!(exit_signaled.load(std::memory_order_relaxed)))
         libusb_handle_events_timeout_completed(usb_context, &tv, nullptr);

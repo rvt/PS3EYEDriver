@@ -12,7 +12,7 @@ extern volatile bool _ps3eye_debug;
 template<typename... xs> inline void ps3eye_debug(const xs&... args)
 {
     if (_ps3eye_debug)
-        fprintf(stdout, args...);
+        fprintf(stderr, args...);
 }
 #else
 template<typename... xs> inline void ps3eye_debug(const xs&...) {}

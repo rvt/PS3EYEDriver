@@ -1,4 +1,6 @@
 #include "ps3eye.hpp"
+#include <thread>
+#include <chrono>
 #include <cstdlib>
 
 static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
@@ -14,8 +16,11 @@ static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
 
     bool ret = false;
 
+    using namespace std::chrono_literals;
+
     for (unsigned k = 0; k < 10; k++)
     {
+        if (fps > 0) std::this_thread::sleep_for(1ms * 500/fps);
         ret |= cam.get_frame(buf.data());
         if (ret)
             break;

@@ -3,7 +3,7 @@
  * Thomas Perl <m@thp.io>; 2014-01-10
  * Joseph Howse <josephhowse@nummist.com>; 2014-12-26
  **/
-#include "../ps3eye.hpp"
+#include "ps3eye.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -41,8 +41,10 @@ static void print_renderer_info(SDL_Renderer* renderer)
     printf("Renderer: %s\n", renderer_info.name);
 }
 
-static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
+static void run_camera(ps3eye::resolution res, int fps)
 {
+    ps3eye::camera::set_debug(true);
+
     context ctx(res, fps);
     ctx.running &= ctx.eye->start();
 
@@ -54,22 +56,24 @@ static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
 
     //ctx.eye->set_flip_status(true); /* mirrored left-right */
 
+    auto [ w, h ] = ctx.eye->size();
+
     char title[256];
-    sprintf(title, "%dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
+    sprintf(title, "%dx%d@%d\n", w, h, ctx.eye->framerate());
 
     SDL_Window* window = SDL_CreateWindow(title,
                                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                                          ctx.eye->width(), ctx.eye->height(), 0);
-    if (window == nullptr)
+                                          w, h, 0);
+    if (!window)
     {
-        printf("Failed to create window: %s\n", SDL_GetError());
+        fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
         return;
     }
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (renderer == nullptr)
+    if (!renderer)
     {
-        printf("Failed to create renderer: %s\n", SDL_GetError());
+        fprintf(stderr, "Failed to create renderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         return;
     }
@@ -80,25 +84,20 @@ static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGR24, SDL_TEXTUREACCESS_STREAMING,
                           ctx.eye->width(), ctx.eye->height());
 
-    if (video_tex == nullptr)
+    if (!video_tex)
     {
-        printf("Failed to create video texture: %s\n", SDL_GetError());
+        fprintf(stderr, "Failed to create video texture: %s\n", SDL_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         return;
     }
 
-    ctx.running &= ctx.eye->start();
-
-    fprintf(stderr, "camera mode: %dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
+    fprintf(stderr, "camera mode: %dx%d@%d %d\n", w, h, ctx.eye->framerate(), ctx.running);
 
     SDL_Event e;
-    Uint32 start_ticks = SDL_GetTicks();
+    unsigned nframes = 0, bad_frames = 0;
     while (ctx.running)
     {
-        if (duration != 0 && (SDL_GetTicks() - start_ticks) / 1000 >= duration)
-            break;
-
         while (SDL_PollEvent(&e))
         {
             if (e.type == SDL_QUIT ||
@@ -113,7 +112,8 @@ static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
 
             ctx.last_frames++;
 
-            if (now_ticks - ctx.last_ticks > 1000)
+            if (ps3eye::camera::is_debugging() &&
+                now_ticks - ctx.last_ticks > 1000)
             {
                 fprintf(stderr, "FPS: %.2f\n", 1000 * ctx.last_frames / double(now_ticks - ctx.last_ticks));
                 ctx.last_ticks = now_ticks;
@@ -125,10 +125,13 @@ static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
         int pitch;
         SDL_LockTexture(video_tex, nullptr, &video_tex_pixels, &pitch);
         bool status = ctx.eye->get_frame((uint8_t*)video_tex_pixels);
-        SDL_UnlockTexture(video_tex);
 
-        if (!status)
-            break;
+        if (status)
+            nframes++;
+        else
+            bad_frames++;
+
+        SDL_UnlockTexture(video_tex);
 
         SDL_RenderCopy(renderer, video_tex, nullptr, nullptr);
         SDL_RenderPresent(renderer);
@@ -139,11 +142,13 @@ static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
     SDL_DestroyTexture(video_tex);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+
+    fprintf(stderr, "%u frames, %u bad_frames\n", nframes, bad_frames);
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char** argv)
 {
-    ps3eye::resolution res = ps3eye::res_SVGA;
+    ps3eye::resolution res = ps3eye::res_VGA;
     int fps = 60;
 
     for (int i = 1; i < argc; i++)
@@ -168,7 +173,7 @@ int main(int argc, char* argv[])
         if (!good_arg)
         {
             std::cerr << "Usage: " << argv[0]
-                      << " [--fps XX] [--qvga]" << std::endl;
+                      << " [--fps num] [--qvga]" << std::endl;
             return 64 /* EX_USAGE */;
         }
     }
@@ -179,8 +184,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    run_camera(res, fps, 0);
+    run_camera(res, fps);
 
     return EXIT_SUCCESS;
 }
-

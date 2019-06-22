@@ -39,4 +39,14 @@ endif()
 add_executable(ps3eye-mode-test "mode-test.cxx")
 target_link_libraries(ps3eye-mode-test ps3eye-driver)
 
-add_subdirectory("sdl")
+if(TARGET ps3eye-driver)
+    find_package(SDL2 QUIET)
+
+    if(SDL2_FOUND)
+        include_directories(${SDL2_INCLUDE_DIRS})
+        link_libraries(${SDL2_LIBRARIES})
+        link_libraries(ps3eye-driver)
+        add_executable(ps3eye-sdl "sdl.cxx")
+    endif()
+endif()
+

@@ -16,7 +16,8 @@ struct libusb_device_handle;
 namespace ps3eye::detail {
 
 enum class resolution : uint8_t {
-    QVGA, SVGA,
+    QVGA,
+    VGA,
 };
 
 struct rate_s
@@ -157,6 +158,6 @@ namespace ps3eye
     using ps3eye::detail::camera;
     using ps3eye::detail::resolution;
 
-    static constexpr inline auto res_SVGA = resolution::SVGA;
+    static constexpr inline auto res_VGA = resolution::VGA;
     static constexpr inline auto res_QVGA = resolution::QVGA;
 } // ns ps3eye

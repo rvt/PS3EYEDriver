@@ -199,17 +199,21 @@ camera::~camera()
 {
     stop();
     release();
+    if (device_)
+        libusb_unref_device(device_);
 }
 
 void camera::release()
 {
     if (handle_)
         close_usb();
+    handle_ = nullptr;
 }
 
 bool camera::init(resolution res, int framerate, format fmt)
 {
     stop();
+    //release();
 
     uint16_t sensor_id;
 
@@ -300,14 +304,18 @@ bool camera::start()
 
 void camera::stop()
 {
-    if (!streaming_) return;
+    if (!streaming_)
+        return;
 
-    /* stop streaming data */
-    ov534_reg_write(0xe0, 0x09);
-    ov534_set_led(0);
+    if (handle_)
+    {
+        /* stop streaming data */
+        ov534_reg_write(0xe0, 0x09);
+        ov534_set_led(0);
 
-    // close urb
-    urb.close_transfers();
+        // close urb
+        urb.close_transfers();
+    }
 
     streaming_ = false;
 }
@@ -412,9 +420,7 @@ void camera::close_usb()
     libusb_release_interface(handle_, 0);
     libusb_attach_kernel_driver(handle_, 0);
     libusb_close(handle_);
-    libusb_unref_device(device_);
     handle_ = nullptr;
-    device_ = nullptr;
     ps3eye_debug("device closed\n");
 }
 
@@ -459,6 +465,9 @@ rate_s camera::_normalize_framerate(int fps, resolution res)
         { 75, 0x01, 0x81, 0x02 }, /* 75 FPS or below: video is valid */
         { 60, 0x00, 0x41, 0x04 },
         { 50, 0x01, 0x41, 0x02 },
+        { 40, 0x02, 0xc1, 0x04 },
+        { 30, 0x04, 0x81, 0x02 },
+        { 15, 0x03, 0x41, 0x04 },
     };
 
     static const struct rate_s rate_1[] = {
@@ -476,6 +485,7 @@ rate_s camera::_normalize_framerate(int fps, resolution res)
         {  50, 0x04, 0x41, 0x02 },
         {  40, 0x06, 0x81, 0x03 },
         {  37, 0x03, 0x41, 0x04 },
+        {  30, 0x04, 0x41, 0x04 },
     };
 
     struct rate_s const* r;
@@ -484,7 +494,7 @@ rate_s camera::_normalize_framerate(int fps, resolution res)
     switch (res)
     {
     default:
-    case res_SVGA:
+    case res_VGA:
         r = rate_0;
         i = std::size(rate_0);
         break;
@@ -655,7 +665,7 @@ std::pair<int, int> camera::size() const
     switch (resolution_)
     {
     default:
-    case res_SVGA:
+    case res_VGA:
         return { 640, 480 };
     case res_QVGA:
         return { 320, 240 };

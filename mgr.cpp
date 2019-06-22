@@ -19,12 +19,12 @@ usb_manager::usb_manager()
     libusb_init(&usb_context);
     libusb_set_option(usb_context,
                       LIBUSB_OPTION_LOG_LEVEL,
-                      _ps3eye_debug ? LIBUSB_LOG_LEVEL_NONE : LIBUSB_LOG_LEVEL_INFO);
+                      _ps3eye_debug ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE);
 }
 
 usb_manager::~usb_manager()
 {
-    ps3eye_debug("usb_manager destructor\n");
+    //ps3eye_debug("usb_manager destructor\n");
     if (update_thread.joinable())
         stop_xfer_thread();
     libusb_exit(usb_context);
@@ -118,8 +118,9 @@ void usb_manager::set_debug(bool value)
         return;
 
     _ps3eye_debug = value;
-    auto loglevel = value ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE;
-    libusb_set_option(usb_context, LIBUSB_OPTION_LOG_LEVEL, loglevel);
+    libusb_set_option(usb_context,
+                      LIBUSB_OPTION_LOG_LEVEL,
+                      value ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE);
 }
 
 } // ns ps3eye::detail

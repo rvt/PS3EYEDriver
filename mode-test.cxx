@@ -20,7 +20,9 @@ static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
 
     for (unsigned k = 0; k < 10; k++)
     {
-        if (fps > 0) std::this_thread::sleep_for(1ms * 500/fps);
+        if (fps > 0)
+            std::this_thread::sleep_for(1ms * 1000/fps);
+
         ret |= cam.get_frame(buf.data());
         if (ret)
             break;
@@ -28,13 +30,21 @@ static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
 
     if (ret)
     {
-        for (int k = 0; k < fps * 10; k++)
+        for (int k = 0; k < 5; k++)
         {
+            if (fps > 0)
+                std::this_thread::sleep_for(1ms * 750/fps);
+
             ret &= cam.get_frame(buf.data());
             if (!ret)
+            {
+                ps3eye::detail::ps3eye_debug("read failed on frame %d\n", k);
                 break;
+            }
         }
     }
+    else
+        ps3eye::detail::ps3eye_debug("can't read any frame\n");
 
     printf("[%s] %dx%d@%dHz\n", ret ? "GOOD" : "FAIL", cam.width(), cam.height(), cam.framerate());
 
@@ -47,7 +57,7 @@ int main(void)
                                       40, 50, 60, 75, 90, 100, 125, 137, 150, 187 };
     static const int rates_svga[] = { 2, 3, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 83 };
 
-    ps3eye::camera::set_debug(false);
+    ps3eye::camera::set_debug(true);
     auto devices = ps3eye::list_devices();
     constexpr int ex_NOINPUT = 66 /* sysexits(3) */;
 
@@ -77,6 +87,8 @@ int main(void)
         last_fps = fps;
         status &= test(*cam, rates_qvga[i], ps3eye::res_VGA);
     }
+
+    ps3eye::camera::set_debug(false);
 
     return status ? EXIT_SUCCESS : ex_NOINPUT;
 }

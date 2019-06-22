@@ -8,9 +8,11 @@ struct libusb_context;
 struct libusb_device;
 struct libusb_device_handle;
 
-namespace ps3eye::detail {
-
+namespace ps3eye {
 struct camera;
+} // ns ps3eye
+
+namespace ps3eye::detail {
 
 struct usb_manager
 {

@@ -10,6 +10,7 @@ struct val_
 {
     static constexpr int min = min_;
     static constexpr int max = max_;
+    static constexpr int def = (1+max_-min_)/2;
 
     constexpr val_& operator=(long x)
     {

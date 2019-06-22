@@ -14,12 +14,6 @@ struct libusb_device;
 struct libusb_device_handle;
 
 namespace ps3eye::detail {
-
-enum class resolution : uint8_t {
-    QVGA,
-    VGA,
-};
-
 struct rate_s
 {
     int fps;
@@ -27,6 +21,22 @@ struct rate_s
     uint8_t r0d;
     uint8_t re5;
 };
+} // ns ps3eye::detail
+
+namespace ps3eye {
+
+enum class resolution : uint8_t {
+    QVGA,
+    VGA,
+};
+
+static constexpr inline auto res_VGA = resolution::VGA;
+static constexpr inline auto res_QVGA = resolution::QVGA;
+
+static constexpr inline auto fmt_RGB = format::RGB;
+static constexpr inline auto fmt_BGR = format::BGR;
+static constexpr inline auto fmt_Gray = format::Gray;
+static constexpr inline auto fmt_Bayer = format::Bayer;
 
 struct camera
 {
@@ -52,22 +62,22 @@ struct camera
     void set_contrast(int val);
     constexpr uint8_t brightness() const { return brightness_; }
     void set_brightness(int val);
-    constexpr uint8_t hue() const { return hue_; }
+    constexpr int8_t hue() const { return hue_; }
     void set_hue(int val);
-    constexpr uint8_t red_balance() const { return redblc_; }
+    constexpr uint8_t red_balance() const { return red_balance_; }
     void set_red_balance(int val);
-    constexpr uint8_t blue_balance() const { return blueblc_; }
+    constexpr uint8_t blue_balance() const { return blue_balance_; }
     void set_blue_balance(int val);
-    constexpr uint8_t green_balance() const { return greenblc_; }
+    constexpr uint8_t green_balance() const { return green_balance_; }
     void set_green_balance(int val);
-    constexpr int saturation() const { return saturation_; }
-    void set_saturation(int val);
     constexpr std::pair<bool, bool> flip_status() { return { flip_h_, flip_v_ }; }
     void set_flip_status(bool horizontal = false, bool vertical = false);
     constexpr bool test_pattern_status() const { return test_pattern_; }
     void set_test_pattern_status(bool enable);
     constexpr int framerate() const { return framerate_; }
     bool set_framerate(int val);
+    constexpr int saturation() const { return saturation_; }
+    void set_saturation(int val);
 
     constexpr bool is_open() const { return streaming_; }
     constexpr bool is_initialized() const { return device_ && handle_ && size() != std::pair<int,int>(); }
@@ -92,13 +102,18 @@ struct camera
     void operator=(const camera&) = delete;
 
     static void set_debug(bool value);
-    static bool is_debugging() { return _ps3eye_debug; }
+    static bool is_debugging() { return ps3eye::detail::_ps3eye_debug; }
 
     static int normalize_framerate(int fps, resolution res);
     int normalize_framerate(int fps);
 
+    constexpr int error_code() const { return error_code_; }
+    const char* error_message() const;
+
+    static constexpr int NO_ERROR = 0;
+
 private:
-    static rate_s _normalize_framerate(int fps, resolution res);
+    static ps3eye::detail::rate_s _normalize_framerate(int fps, resolution res);
 
     void release();
     [[nodiscard]] bool open_usb();
@@ -109,28 +124,31 @@ private:
     void ov534_set_led(int status);
     void ov534_reg_write(uint16_t reg, uint8_t val);
     uint8_t ov534_reg_read(uint16_t reg);
-    int sccb_check_status();
+    bool sccb_check_status();
     void sccb_reg_write(uint8_t reg, uint8_t val);
     uint8_t sccb_reg_read(uint16_t reg);
     void reg_w_array(const uint8_t (*data)[2], int len);
     void sccb_w_array(const uint8_t (*data)[2], int len);
 
-    template<uint8_t max = 255> using val = val_<uint8_t, 0, max>;
+    int error_code_ = NO_ERROR;
+
+    template<uint8_t min = 0, uint8_t max = 255> using val = ps3eye::detail::val_<uint8_t, min, max>;
+    template<int8_t min, uint8_t max> using val_ = ps3eye::detail::val_<int8_t, min, max>;
 
     // controls
-    val<63> gain_ = 20; // 0 <-> 63
-    val<63> sharpness_ = 0; // 0 <-> 63
-    val<> exposure_ = 255;  // 0 <-> 255
-    val<> hue_ = 143;       // 0 <-> 255
-    val<> brightness_ = 20; // 0 <-> 255
-    val<> contrast_ = 37;   // 0 <-> 255
-    val<> blueblc_ = 128;    // 0 <-> 255
-    val<> redblc_ = 128;     // 0 <-> 255
-    val<> greenblc_ = 128;   // 0 <-> 255
-    val<6> saturation_ = 3;
+    val<0, 63> gain_ = 20;
+    val<0, 63> sharpness_ = 0;
+    val<> exposure_ = 255;
+    val<0, 128> hue_ = 64;
+    val<> brightness_ = 20;
+    val<> contrast_ = 0;
+    val<> blue_balance_ = 128;
+    val<> red_balance_ = 128;
+    val<> green_balance_ = 128;
+    val<> saturation_ = 0;
 
-    bool auto_gain_ = false;
-    bool awb_ = false;
+    bool auto_gain_ = true;
+    bool awb_ = true;
     bool flip_h_ = false;
     bool flip_v_ = false;
     bool test_pattern_ = false;
@@ -146,21 +164,10 @@ private:
     // usb stuff
     libusb_device* device_ = nullptr;
     libusb_device_handle* handle_ = nullptr;
-    urb_descriptor urb;
+    ps3eye::detail::urb_descriptor urb;
     std::array<uint8_t, 64> usb_buf;
 };
 
 std::vector<std::shared_ptr<camera>> list_devices();
 
-} // namespace ps3eye::detail
-
-namespace ps3eye
-{
-    using ps3eye::detail::list_devices;
-
-    using ps3eye::detail::camera;
-    using ps3eye::detail::resolution;
-
-    static constexpr inline auto res_VGA = resolution::VGA;
-    static constexpr inline auto res_QVGA = resolution::QVGA;
-} // ns ps3eye
+} // namespace ps3eye

@@ -139,10 +139,8 @@ void urb_descriptor::close_transfers()
     if (num_active_transfers == 0) return;
 
     // Cancel any pending transfers
-    for (int index = 0; index < num_transfers; ++index)
-    {
-        libusb_cancel_transfer(xfr[index]);
-    }
+    for (unsigned i = 0; i < num_transfers; ++i)
+        libusb_cancel_transfer(xfr[i]);
 
     // Wait for cancelation to finish
     num_active_transfers_condition.wait(lock, [this]() {
@@ -150,10 +148,13 @@ void urb_descriptor::close_transfers()
     });
 
     // Free completed transfers
-    for (int index = 0; index < num_transfers; ++index)
+    for (unsigned i = 0; i < num_transfers; ++i)
     {
-        libusb_free_transfer(xfr[index]);
-        xfr[index] = nullptr;
+        if (!xfr[i])
+            continue;
+
+        libusb_free_transfer(xfr[i]);
+        xfr[i] = nullptr;
     }
 
     usb_manager::instance().camera_stopped();
@@ -298,7 +299,7 @@ scan_next:
 
 urb_descriptor::~urb_descriptor()
 {
-    ps3eye_debug("urb_descriptor destructor\n");
+    //ps3eye_debug("urb_descriptor destructor\n");
     close_transfers();
 }
 

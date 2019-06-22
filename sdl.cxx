@@ -35,7 +35,7 @@ static void run_camera(ps3eye::resolution res, int fps)
     auto camera = cameras[0];
     bool running = true;
 
-    running &= camera->init(res, fps);
+    running &= camera->init(res, fps, ps3eye::fmt_BGR);
     running &= camera->start();
 
     if (!running)

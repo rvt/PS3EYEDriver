@@ -22,12 +22,6 @@
 
 #include <libusb.h>
 
-namespace ps3eye::detail {
-
-using namespace std::chrono_literals;
-
-volatile bool _ps3eye_debug = true;
-
 enum : uint8_t {
     OV534_REG_ADDRESS = 0xf1, /* sensor address */
     OV534_REG_SUBADDR = 0xf2,
@@ -39,6 +33,17 @@ enum : uint8_t {
     OV534_OP_WRITE_2 = 0x33,
     OV534_OP_READ_2 = 0xf9,
 };
+
+using namespace std::chrono_literals;
+
+namespace ps3eye::detail {
+volatile bool _ps3eye_debug = true;
+} // ns ps3eye::detail
+
+using ps3eye::detail::ps3eye_debug;
+using ps3eye::detail::rate_s;
+
+namespace ps3eye {
 
 static const uint8_t ov534_reg_initdata[][2] = {
     { 0xe7, 0x3a },
@@ -209,19 +214,19 @@ void camera::release()
     if (handle_)
         close_usb();
     handle_ = nullptr;
+    error_code_ = NO_ERROR;
 }
 
 bool camera::init(resolution res, int framerate, format fmt)
 {
+    error_code_ = NO_ERROR;
     stop();
-    //release();
+    if (error_code_ != NO_ERROR)
+        release();
 
     // open usb device so we can setup and go
-    if (!handle_)
-    {
-        if (!open_usb())
-            return false;
-    }
+    if (!handle_ && !open_usb())
+        return false;
 
     resolution_ = res;
 
@@ -263,7 +268,7 @@ bool camera::init(resolution res, int framerate, format fmt)
 
 bool camera::start()
 {
-    if (!is_initialized() || streaming_)
+    if (!is_initialized() || streaming_ || error_code_ != NO_ERROR)
         return false;
 
     if (resolution_ == res_QVGA)
@@ -279,17 +284,19 @@ bool camera::start()
 
     ov534_set_frame_rate(framerate_);
 
+
+    set_hue(hue_);
+    set_saturation(saturation_);
     set_auto_gain(auto_gain_);
     set_awb(awb_);
     set_gain(gain_);
-    set_hue(hue_);
     set_exposure(exposure_);
     set_brightness(brightness_);
     set_contrast(contrast_);
     set_sharpness(sharpness_);
-    set_red_balance(redblc_);
-    set_blue_balance(blueblc_);
-    set_green_balance(greenblc_);
+    set_red_balance(red_balance_);
+    set_blue_balance(blue_balance_);
+    set_green_balance(green_balance_);
     set_flip_status(flip_h_, flip_v_);
 
     ov534_set_led(1);
@@ -338,6 +345,7 @@ bool camera::usb_port(char* buf, unsigned sz) const
         int bus_id = libusb_get_bus_number(device_);
 
         snprintf(buf, sz, "b%d", bus_id);
+
         if (cnt > 0)
         {
             success = true;
@@ -351,9 +359,7 @@ bool camera::usb_port(char* buf, unsigned sz) const
                          (i == 0) ? "_p%d" : ".%d", port_number);
 
                 if (strlen(buf) + strlen(port_string) + 1 <= sz)
-                {
                     std::strcat(buf, port_string);
-                }
                 else
                 {
                     success = false;
@@ -396,6 +402,7 @@ bool camera::open_usb()
     if (res != 0)
     {
         ps3eye_debug("device open error: %d\n", res);
+        error_code_ = res;
         return false;
     }
 
@@ -410,6 +417,7 @@ bool camera::open_usb()
     if (res != 0)
     {
         ps3eye_debug("device claim interface error: %d\n", res);
+        error_code_ = res;
         return false;
     }
 
@@ -418,12 +426,10 @@ bool camera::open_usb()
 
 void camera::close_usb()
 {
-    ps3eye_debug("closing device\n");
     libusb_release_interface(handle_, 0);
     libusb_attach_kernel_driver(handle_, 0);
     libusb_close(handle_);
     handle_ = nullptr;
-    ps3eye_debug("device closed\n");
 }
 
 /* Two bits control LED: 0x21 bit 7 and 0x23 bit 7.
@@ -537,6 +543,9 @@ int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
 
 void camera::ov534_reg_write(uint16_t reg, uint8_t val)
 {
+    if (error_code_ != NO_ERROR)
+        return;
+
     int ret;
 
     // debug("reg=0x%04x, val=0%02x", reg, val);
@@ -545,13 +554,14 @@ void camera::ov534_reg_write(uint16_t reg, uint8_t val)
     ret = libusb_control_transfer(handle_, LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
                                   0x01, 0x00, reg, usb_buf.data(), 1, 500);
     if (ret < 0)
-    {
-        ps3eye_debug("write failed\n");
-    }
+        error_code_ = ret;
 }
 
 uint8_t camera::ov534_reg_read(uint16_t reg)
 {
+    if (error_code_ != NO_ERROR)
+        return 0;
+
     int ret;
 
     ret = libusb_control_transfer(handle_, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
@@ -560,33 +570,48 @@ uint8_t camera::ov534_reg_read(uint16_t reg)
     // debug("reg=0x%04x, data=0x%02x", reg, usb_buf[0]);
     if (ret < 0)
     {
-        ps3eye_debug("read failed\n");
+        error_code_ = ret;
+        return 0;
     }
-    return usb_buf[0];
+    else
+        return usb_buf[0];
 }
 
-int camera::sccb_check_status()
+bool camera::sccb_check_status()
 {
-    uint8_t data;
-    int i;
+    if (error_code_ != NO_ERROR)
+        return false;
 
-    for (i = 0; i < 5; i++)
+    bool ret = false;
+
+    for (int i = 0; i < 5; i++)
     {
-        data = ov534_reg_read(OV534_REG_STATUS);
+        uint8_t data = ov534_reg_read(OV534_REG_STATUS);
+
+        if (error_code_ != NO_ERROR)
+            return false;
 
         switch (data)
         {
         case 0x00:
-            return 1;
+            ret = true;
+            goto end;
         case 0x04:
-            return 0;
+            ret = false;
+            goto end;
         case 0x03:
             break;
         default:
             ps3eye_debug("sccb status 0x%02x, attempt %d/5\n", data, i + 1);
         }
+
+        std::this_thread::yield();
     }
-    return 0;
+
+    ps3eye_debug("sscb status failure\n");
+
+end:
+    return ret;
 }
 
 void camera::sccb_reg_write(uint8_t reg, uint8_t val)
@@ -596,26 +621,17 @@ void camera::sccb_reg_write(uint8_t reg, uint8_t val)
     ov534_reg_write(OV534_REG_WRITE, val);
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_WRITE_3);
 
-    if (!sccb_check_status())
-    {
-        ps3eye_debug("sccb_reg_write failed\n");
-    }
+    (void)sccb_check_status();
 }
 
 uint8_t camera::sccb_reg_read(uint16_t reg)
 {
     ov534_reg_write(OV534_REG_SUBADDR, (uint8_t)reg);
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_WRITE_2);
-    if (!sccb_check_status())
-    {
-        ps3eye_debug("sccb_reg_read failed 1\n");
-    }
+    (void)sccb_check_status();
 
     ov534_reg_write(OV534_REG_OPERATION, OV534_OP_READ_2);
-    if (!sccb_check_status())
-    {
-        ps3eye_debug("sccb_reg_read failed 2\n");
-    }
+    (void)sccb_check_status();
 
     return ov534_reg_read(OV534_REG_READ);
 }
@@ -647,30 +663,12 @@ void camera::sccb_w_array(const uint8_t (*data)[2], int len)
     }
 }
 
-//bool camera::enumerated = false;
-//std::vector<std::shared_ptr<camera>> camera::devices;
-
-std::vector<std::shared_ptr<camera>> list_devices()
+const char* camera::error_message() const
 {
-    return usb_manager::instance().list_devices();
+    if (error_code_ == NO_ERROR)
+        return nullptr;
+
+    return libusb_strerror((libusb_error)error_code_);
 }
 
-void camera::set_debug(bool value)
-{
-    usb_manager::instance().set_debug(value);
-    _ps3eye_debug = value;
-}
-
-std::pair<int, int> camera::size() const
-{
-    switch (resolution_)
-    {
-    default:
-    case res_VGA:
-        return { 640, 480 };
-    case res_QVGA:
-        return { 320, 240 };
-    }
-}
-
-} // namespace ps3eye
+} // namespace ps3eye::detail

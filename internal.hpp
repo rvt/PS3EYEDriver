@@ -18,6 +18,9 @@ template<typename... xs> inline void ps3eye_debug(const xs&... args)
 template<typename... xs> inline void ps3eye_debug(const xs&...) {}
 #endif
 
+} // ns ps3eye::detail
+
+namespace ps3eye {
 enum class format
 {
     Bayer, // Output in Bayer. Destination buffer must be width * height bytes
@@ -25,5 +28,4 @@ enum class format
     RGB, // Output in RGB. Destination buffer must be width * height * 3 bytes
     Gray // Output in Grayscale. Destination buffer must be width * height bytes
 };
-
-} // ns ps3eye::detail
+} // ns ps3eye

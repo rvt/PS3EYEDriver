@@ -83,13 +83,11 @@ void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
          source_row += source_stride, dest_row += dest_stride, ++y)
     {
         const uint8_t* source = source_row;
+        // -2 to deal with the fact that we're starting at the second pixel of
+        // the row and should end at the second-to-last pixel of the row
+        // (first and last are filled separately)
         const uint8_t* source_end =
-            source + (source_stride - 2); // -2 to deal with the fact that
-        // we're starting at the second
-        // pixel of the row and should end
-        // at the second-to-last pixel of
-        // the row (first and last are
-        // filled separately)
+            source + (source_stride - 2);
         uint8_t* dest = dest_row;
 
         // Row starting with Green
@@ -110,11 +108,9 @@ void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
                 // Blue pixel
                 B = source[source_stride + 1];
                 G = (source[1] + source[source_stride] + source[source_stride + 2] +
-                     source[source_stride * 2 + 1] + 2) >>
-                                                        2;
+                     source[source_stride * 2 + 1] + 2) >> 2;
                 R = (source[0] + source[2] + source[source_stride * 2] +
-                     source[source_stride * 2 + 2] + 2) >>
-                                                        2;
+                     source[source_stride * 2 + 2] + 2) >> 2;
                 dest[0] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
 
                 //  Green pixel
@@ -150,11 +146,9 @@ void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
         {
             B = source[source_stride + 1];
             G = (source[1] + source[source_stride] + source[source_stride + 2] +
-                 source[source_stride * 2 + 1] + 2) >>
-                                                    2;
+                 source[source_stride * 2 + 1] + 2) >> 2;
             R = (source[0] + source[2] + source[source_stride * 2] +
-                 source[source_stride * 2 + 2] + 2) >>
-                                                    2;
+                 source[source_stride * 2 + 2] + 2) >> 2;
 
             dest[0] = (uint8_t)((R * 77 + G * 151 + B * 28) >> 8);
 
@@ -193,7 +187,7 @@ void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, 
     //
     // This is the normal Bayer pattern shifted left one place.
 
-    int num_output_channels = 3;
+    constexpr int num_output_channels = 3;
     int source_stride = W;
     const uint8_t* source_row = input; // Start at first bayer pixel
     int dest_stride = W * num_output_channels;
@@ -212,8 +206,7 @@ void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, 
         // -2 to deal with the fact that we're starting at the second pixel of
         // the row and should end at the second-to-last pixel of the row
         // (first and last are filled separately)
-        const uint8_t* source_end =
-            source + (source_stride - 2);
+        const uint8_t* source_end = source + (source_stride - 2);
         uint8_t* dest = dest_row;
 
         // Row starting with Green

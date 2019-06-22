@@ -1,19 +1,23 @@
 #include "ps3eye.hpp"
+#include "mgr.hpp"
 
-namespace ps3eye::detail {
+using ps3eye::detail::usb_manager;
+using ps3eye::detail::_ps3eye_debug;
+
+namespace ps3eye {
 
 void camera::set_auto_gain(bool val)
 {
     auto_gain_ = val;
     if (val)
     {
-        sccb_reg_write(0x13, 0xf7); // AGC,AEC,AWB ON
+        sccb_reg_write(0x13, sccb_reg_read(0x13) | 0x04);
         sccb_reg_write(0x64, sccb_reg_read(0x64) | 0x03);
     }
     else
     {
-        sccb_reg_write(0x13, 0xf0); // AGC,AEC,AWB OFF
-        sccb_reg_write(0x64, sccb_reg_read(0x64) & 0xFC);
+        sccb_reg_write(0x13, sccb_reg_read(0x13) & ~0x04);
+        sccb_reg_write(0x64, sccb_reg_read(0x64) & ~0x03);
 
         set_gain(gain_);
         set_exposure(exposure_);
@@ -23,10 +27,17 @@ void camera::set_auto_gain(bool val)
 void camera::set_awb(bool val)
 {
     awb_ = val;
+
     if (val)
-        sccb_reg_write(0x63, 0xe0); // AWB ON
+    {
+        sccb_reg_write(0x13, sccb_reg_read(0x13) | 0x02);
+        sccb_reg_write(0x63, sccb_reg_read(0x63) | 0xc0);
+    }
     else
-        sccb_reg_write(0x63, 0xAA); // AWB OFF
+    {
+        sccb_reg_write(0x13, sccb_reg_read(0x13) & ~0x02);
+        sccb_reg_write(0x63, sccb_reg_read(0x63) & ~0xc0);
+    }
 }
 
 bool camera::set_framerate(int val)
@@ -75,25 +86,25 @@ void camera::set_brightness(int val)
 void camera::set_hue(int val)
 {
     hue_ = val;
-    sccb_reg_write(0x01, hue_);
+    sccb_reg_write(0x01, (uint8_t)hue_);
 }
 
 void camera::set_red_balance(int val)
 {
-    redblc_ = val;
-    sccb_reg_write(0x43, redblc_);
+    red_balance_ = val;
+    sccb_reg_write(0x43, red_balance_);
 }
 
 void camera::set_blue_balance(int val)
 {
-    blueblc_ = val;
-    sccb_reg_write(0x42, blueblc_);
+    blue_balance_ = val;
+    sccb_reg_write(0x42, blue_balance_);
 }
 
 void camera::set_green_balance(int val)
 {
-    greenblc_ = val;
-    sccb_reg_write(0x44, greenblc_);
+    green_balance_ = val;
+    sccb_reg_write(0x44, green_balance_);
 }
 
 void camera::set_flip_status(bool horizontal, bool vertical)
@@ -139,4 +150,27 @@ void camera::set_saturation(int val)
     sccb_reg_write(0xa8, saturation_); /* V saturation */
 }
 
-} // ns ps3eye::detail
+void camera::set_debug(bool value)
+{
+    usb_manager::instance().set_debug(value);
+    _ps3eye_debug = value;
+}
+
+std::pair<int, int> camera::size() const
+{
+    switch (resolution_)
+    {
+    default:
+    case res_VGA:
+        return { 640, 480 };
+    case res_QVGA:
+        return { 320, 240 };
+    }
+}
+
+std::vector<std::shared_ptr<camera>> list_devices()
+{
+    return usb_manager::instance().list_devices();
+}
+
+} // ns ps3eye

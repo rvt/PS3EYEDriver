@@ -25,6 +25,8 @@ namespace ps3eye::detail {
 
 using namespace std::chrono_literals;
 
+volatile bool _ps3eye_debug = true;
+
 enum : uint8_t {
     OV534_REG_ADDRESS = 0xf1, /* sensor address */
     OV534_REG_SUBADDR = 0xf2,
@@ -205,8 +207,10 @@ void camera::release()
         close_usb();
 }
 
-bool camera::init(int width, int height, int framerate, format fmt)
+bool camera::init(resolution res, int framerate, format fmt)
 {
+    stop();
+
     uint16_t sensor_id;
 
     // open usb device so we can setup and go
@@ -216,17 +220,8 @@ bool camera::init(int width, int height, int framerate, format fmt)
             return false;
     }
 
-    // find best cam mode
-    if ((width == 0 && height == 0) || width > 320 || height > 240)
-    {
-        width_ = 640;
-        height_ = 480;
-    }
-    else
-    {
-        width_ = 320;
-        height_ = 240;
-    }
+    resolution_ = res;
+
     frame_rate_ = ov534_set_frame_rate(framerate, true);
     format_ = fmt;
 
@@ -253,10 +248,10 @@ bool camera::init(int width, int height, int framerate, format fmt)
 
     /* initialize */
     reg_w_array(ov534_reg_initdata, std::size(ov534_reg_initdata));
-    ov534_set_led(1);
+    //ov534_set_led(1);
     sccb_w_array(ov772x_reg_initdata, std::size(ov772x_reg_initdata));
     ov534_reg_write(0xe0, 0x09);
-    ov534_set_led(0);
+    //ov534_set_led(0);
 
     return true;
 }
@@ -266,7 +261,7 @@ bool camera::start()
     if (!is_initialized() || streaming_)
         return false;
 
-    if (width_ == 320)
+    if (resolution_ == res_QVGA)
     { /* 320x240 */
         reg_w_array(bridge_start_qvga, std::size(bridge_start_qvga));
         sccb_w_array(sensor_start_qvga, std::size(sensor_start_qvga));
@@ -296,7 +291,8 @@ bool camera::start()
     ov534_reg_write(0xe0, 0x00); // start stream
 
     // init and start urb
-    urb.start_transfers(handle_, width_ * height_);
+    auto [ w, h ] = size();
+    urb.start_transfers(handle_, unsigned(w * h));
     streaming_ = true;
 
     return true;
@@ -376,7 +372,11 @@ int camera::bytes_per_pixel() const
 
 bool camera::get_frame(uint8_t* frame)
 {
-    return urb.queue.dequeue(frame, width_, height_, format_);
+    if (!streaming_)
+        return false;
+
+    auto [ w, h ] = size();
+    return urb.queue.dequeue(frame, w, h, format_);
 }
 
 bool camera::open_usb()
@@ -446,38 +446,22 @@ void camera::ov534_set_led(int status)
     }
 }
 
-/* validate frame rate and (if not dry run) set it */
-int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
+int camera::normalize_framerate(int fps, resolution res)
 {
-    struct rate_s
-    {
-        int fps;
-        uint8_t r11;
-        uint8_t r0d;
-        uint8_t re5;
-    };
+    return _normalize_framerate(fps, res).fps;
+}
 
-    const struct rate_s* r;
-
-    static constexpr struct rate_s rate_0[] = {
+rate_s camera::_normalize_framerate(int fps, resolution res)
+{
+    static const struct rate_s rate_0[] = {
         /* 640x480 */
         { 83, 0x01, 0xc1, 0x02 }, /* 83 FPS: video is partly corrupt */
         { 75, 0x01, 0x81, 0x02 }, /* 75 FPS or below: video is valid */
         { 60, 0x00, 0x41, 0x04 },
         { 50, 0x01, 0x41, 0x02 },
-        { 40, 0x02, 0xc1, 0x04 },
-        { 30, 0x04, 0x81, 0x02 },
-        { 25, 0x00, 0x01, 0x02 },
-        { 20, 0x04, 0x41, 0x02 },
-        { 15, 0x09, 0x81, 0x02 },
-        { 10, 0x09, 0x41, 0x02 },
-        {  8, 0x02, 0x01, 0x02 },
-        {  5, 0x04, 0x01, 0x02 },
-        {  3, 0x06, 0x01, 0x02 },
-        {  2, 0x09, 0x01, 0x02 },
     };
 
-    static constexpr struct rate_s rate_1[] = {
+    static const struct rate_s rate_1[] = {
         /* 320x240 */
         { 290, 0x00, 0xc1, 0x04 },
         { 205, 0x01, 0xc1, 0x02 }, /* 205 FPS or above: video is partly corrupt */
@@ -491,45 +475,53 @@ int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
         {  60, 0x04, 0xc1, 0x04 },
         {  50, 0x04, 0x41, 0x02 },
         {  40, 0x06, 0x81, 0x03 },
-        {  37, 0x00, 0x01, 0x04 },
-        {  30, 0x04, 0x41, 0x04 },
-        {  17, 0x18, 0xc1, 0x02 },
-        {  15, 0x18, 0x81, 0x02 },
-        {  12, 0x02, 0x01, 0x04 },
-        {  10, 0x18, 0x41, 0x02 },
-        {   7, 0x04, 0x01, 0x04 },
-        {   5, 0x06, 0x01, 0x04 },
-        {   3, 0x09, 0x01, 0x04 },
-        {   2, 0x18, 0x01, 0x02 },
+        {  37, 0x03, 0x41, 0x04 },
     };
 
+    struct rate_s const* r;
     int i;
 
-    if (width_ == 640)
+    switch (res)
     {
+    default:
+    case res_SVGA:
         r = rate_0;
         i = std::size(rate_0);
-    }
-    else
-    {
+        break;
+    case res_QVGA:
         r = rate_1;
         i = std::size(rate_1);
+        break;
     }
+
     while (--i > 0)
     {
-        if (frame_rate >= r->fps) break;
+        if (fps >= r->fps) break;
         r++;
     }
 
+    return *r;
+}
+
+int camera::normalize_framerate(int fps)
+{
+    return normalize_framerate(fps, resolution_);
+}
+
+/* validate frame rate and (if not dry run) set it */
+int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
+{
+    const struct rate_s rate = _normalize_framerate(frame_rate, resolution_);
+
     if (!dry_run)
     {
-        sccb_reg_write(0x11, r->r11);
-        sccb_reg_write(0x0d, r->r0d);
-        ov534_reg_write(0xe5, r->re5);
+        sccb_reg_write(0x11, rate.r11);
+        sccb_reg_write(0x0d, rate.r0d);
+        ov534_reg_write(0xe5, rate.re5);
     }
 
-    ps3eye_debug("frame_rate: %d\n", r->fps);
-    return r->fps;
+    ps3eye_debug("frame_rate: %d\n", rate.fps);
+    return rate.fps;
 }
 
 void camera::ov534_reg_write(uint16_t reg, uint8_t val)
@@ -647,14 +639,27 @@ void camera::sccb_w_array(const uint8_t (*data)[2], int len)
 //bool camera::enumerated = false;
 //std::vector<std::shared_ptr<camera>> camera::devices;
 
-std::vector<std::shared_ptr<camera>> camera::list_devices()
+std::vector<std::shared_ptr<camera>> list_devices()
 {
     return usb_manager::instance().list_devices();
 }
 
-constexpr bool camera::is_initialized() const
+void camera::set_debug(bool value)
 {
-    return device_ && handle_ && width_ && height_;
+    usb_manager::instance().set_debug(value);
+    _ps3eye_debug = value;
+}
+
+std::pair<int, int> camera::size() const
+{
+    switch (resolution_)
+    {
+    default:
+    case res_SVGA:
+        return { 640, 480 };
+    case res_QVGA:
+        return { 320, 240 };
+    }
 }
 
 } // namespace ps3eye

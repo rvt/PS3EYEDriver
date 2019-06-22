@@ -17,7 +17,9 @@ enum {
 usb_manager::usb_manager()
 {
     libusb_init(&usb_context);
-    libusb_set_option(usb_context, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
+    libusb_set_option(usb_context,
+                      LIBUSB_OPTION_LOG_LEVEL,
+                      _ps3eye_debug ? LIBUSB_LOG_LEVEL_NONE : LIBUSB_LOG_LEVEL_INFO);
 }
 
 usb_manager::~usb_manager()
@@ -65,9 +67,7 @@ void usb_manager::stop_xfer_thread()
 
 void usb_manager::xfer_callback()
 {
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 30 * 1000; // ms
+    struct timeval tv { 0, 500 * 1000 /* ms */ };
 
     while (!(exit_signaled.load(std::memory_order_relaxed)))
         libusb_handle_events_timeout_completed(usb_context, &tv, nullptr);
@@ -111,6 +111,15 @@ std::vector<std::shared_ptr<camera>> usb_manager::list_devices()
     libusb_free_device_list(devs, 1);
 
     return list;
+}
+void usb_manager::set_debug(bool value)
+{
+    if (value == _ps3eye_debug)
+        return;
+
+    _ps3eye_debug = value;
+    auto loglevel = value ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE;
+    libusb_set_option(usb_context, LIBUSB_OPTION_LOG_LEVEL, loglevel);
 }
 
 } // ns ps3eye::detail

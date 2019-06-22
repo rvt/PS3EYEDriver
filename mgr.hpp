@@ -22,6 +22,8 @@ struct usb_manager
     void camera_started();
     void camera_stopped();
 
+    void set_debug(bool value);
+
 private:
     libusb_context* usb_context = nullptr;
     std::thread update_thread;

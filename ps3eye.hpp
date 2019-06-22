@@ -8,19 +8,31 @@
 #include <vector>
 #include <array>
 #include <cstdint>
-#include <tuple>
+#include <utility>
 
 struct libusb_device;
 struct libusb_device_handle;
 
 namespace ps3eye::detail {
 
+enum class resolution : uint8_t {
+    QVGA, SVGA,
+};
+
+struct rate_s
+{
+    int fps;
+    uint8_t r11;
+    uint8_t r0d;
+    uint8_t re5;
+};
+
 struct camera
 {
     explicit camera(libusb_device* device);
     ~camera();
 
-    [[nodiscard]] bool init(int width = 0, int height = 0, int framerate = 30, format fmt = format::BGR);
+    [[nodiscard]] bool init(resolution res, int framerate = 60, format fmt = format::BGR);
     [[nodiscard]] bool start();
     void stop();
 
@@ -47,7 +59,7 @@ struct camera
     void set_blue_balance(int val);
     constexpr uint8_t green_balance() const { return greenblc_; }
     void set_green_balance(int val);
-    constexpr std::tuple<bool, bool> flip_status() { return { flip_h_, flip_v_ }; }
+    constexpr std::pair<bool, bool> flip_status() { return { flip_h_, flip_v_ }; }
     void set_flip_status(bool horizontal = false, bool vertical = false);
     constexpr bool test_pattern_status() const { return test_pattern_; }
     void set_test_pattern_status(bool enable);
@@ -55,7 +67,7 @@ struct camera
     bool set_framerate(int val);
 
     constexpr bool is_open() const { return streaming_; }
-    constexpr bool is_initialized() const;
+    constexpr bool is_initialized() const { return device_ && handle_ && size() != std::pair<int,int>(); }
 
     constexpr libusb_device* device() const { return device_; }
     [[nodiscard]] bool usb_port(char* buf, unsigned sz) const;
@@ -66,19 +78,25 @@ struct camera
     // format. See format.
     [[nodiscard]] bool get_frame(uint8_t* frame);
 
-    constexpr int width() const { return width_; }
-    constexpr int height() const { return height_; }
-    constexpr std::tuple<int, int> size() const { return { width_, height_ }; }
+    inline int width() const { return size().first; }
+    inline int height() const { return size().second; }
+    std::pair<int, int> size() const;
 
-    int stride() const { return width_ * bytes_per_pixel(); }
+    inline int stride() const { return width() * bytes_per_pixel(); }
     int bytes_per_pixel() const;
-
-    static std::vector<std::shared_ptr<camera>> list_devices();
 
     camera(const camera&) = delete;
     void operator=(const camera&) = delete;
 
+    static void set_debug(bool value);
+    static bool is_debugging() { return _ps3eye_debug; }
+
+    static int normalize_framerate(int fps, resolution res);
+    int normalize_framerate(int fps);
+
 private:
+    static rate_s _normalize_framerate(int fps, resolution res);
+
     void release();
     [[nodiscard]] bool open_usb();
     void close_usb();
@@ -117,8 +135,7 @@ private:
     //static bool enumerated;
     //static std::vector<std::shared_ptr<camera>> devices;
 
-    int width_ = 0;
-    int height_ = 0;
+    resolution resolution_;
     int frame_rate_ = 0;
     format format_ = format::BGR;
 
@@ -129,9 +146,17 @@ private:
     std::array<uint8_t, 64> usb_buf;
 };
 
+std::vector<std::shared_ptr<camera>> list_devices();
+
 } // namespace ps3eye::detail
 
 namespace ps3eye
 {
+    using ps3eye::detail::list_devices;
+
     using ps3eye::detail::camera;
+    using ps3eye::detail::resolution;
+
+    static constexpr inline auto res_SVGA = resolution::SVGA;
+    static constexpr inline auto res_QVGA = resolution::QVGA;
 } // ns ps3eye

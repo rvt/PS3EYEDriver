@@ -4,27 +4,30 @@
  * Joseph Howse <josephhowse@nummist.com>; 2014-12-26
  **/
 #include "../ps3eye.hpp"
-#include <SDL.h>
+
 #include <iostream>
 #include <sstream>
+#include <iterator>
+
+#include <SDL.h>
 
 struct context
 {
-    context(int width, int height, int fps)
+    context(ps3eye::resolution res, int fps)
     {
         if (hasDevices())
         {
             eye = devices[0];
-            running = eye->init(width, height, (uint16_t)fps);
+            running = eye->init(res, fps);
         }
         else
             running = false;
     }
 
-    bool hasDevices() { return (devices.size() > 0); }
+    bool hasDevices() { return !devices.empty(); }
 
     std::shared_ptr<ps3eye::camera> eye;
-    std::vector<std::shared_ptr<ps3eye::camera>> devices { ps3eye::camera::list_devices() };
+    std::vector<std::shared_ptr<ps3eye::camera>> devices { ps3eye::list_devices() };
 
     Uint32 last_ticks = 0;
     Uint32 last_frames = 0;
@@ -38,21 +41,25 @@ static void print_renderer_info(SDL_Renderer* renderer)
     printf("Renderer: %s\n", renderer_info.name);
 }
 
-static void run_camera(int width, int height, int fps, Uint32 duration)
+static void run_camera(ps3eye::resolution res, int fps, Uint32 duration)
 {
-    context ctx(width, height, fps);
+    context ctx(res, fps);
+    ctx.running &= ctx.eye->start();
+
     if (!ctx.running)
     {
-        printf("No PS3 Eye camera connected\n");
+        fprintf(stderr, "No PS3 Eye camera connected\n");
         return;
     }
+
     //ctx.eye->set_flip_status(true); /* mirrored left-right */
 
     char title[256];
     sprintf(title, "%dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
 
-    SDL_Window* window = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED,
-                                          SDL_WINDOWPOS_UNDEFINED, width, height, 0);
+    SDL_Window* window = SDL_CreateWindow(title,
+                                          SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                                          ctx.eye->width(), ctx.eye->height(), 0);
     if (window == nullptr)
     {
         printf("Failed to create window: %s\n", SDL_GetError());
@@ -83,7 +90,7 @@ static void run_camera(int width, int height, int fps, Uint32 duration)
 
     ctx.running &= ctx.eye->start();
 
-    printf("Camera mode: %dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
+    fprintf(stderr, "camera mode: %dx%d@%d\n", ctx.eye->width(), ctx.eye->height(), ctx.eye->framerate());
 
     SDL_Event e;
     Uint32 start_ticks = SDL_GetTicks();
@@ -136,41 +143,33 @@ static void run_camera(int width, int height, int fps, Uint32 duration)
 
 int main(int argc, char* argv[])
 {
-    bool mode_test = false;
-    int width = 640;
-    int height = 480;
+    ps3eye::resolution res = ps3eye::res_SVGA;
     int fps = 60;
-    if (argc > 1)
+
+    for (int i = 1; i < argc; i++)
     {
         bool good_arg = false;
-        for (int i = 1; i < argc; i++)
+
+        if (std::string(argv[i]) == "--qvga")
         {
-            if (std::string(argv[i]) == "--qvga")
-            {
-                width = 320;
-                height = 240;
-                good_arg = true;
-            }
-
-            if ((std::string(argv[i]) == "--fps") && argc > i)
-            {
-                std::istringstream new_fps_ss(argv[i + 1]);
-                if (new_fps_ss >> fps)
-                {
-                    good_arg = true;
-                }
-            }
-
-            if (std::string(argv[i]) == "--mode_test")
-            {
-                mode_test = true;
-                good_arg = true;
-            }
+            res = ps3eye::res_QVGA;
+            good_arg = true;
         }
+        if ((std::string(argv[i]) == "--fps") && argc > i)
+        {
+            std::istringstream new_fps_ss(argv[i + 1]);
+            if (new_fps_ss >> fps)
+            {
+                good_arg = true;
+            }
+            i++;
+        }
+
         if (!good_arg)
         {
             std::cerr << "Usage: " << argv[0]
-                      << " [--fps XX] [--qvga] [--mode_test]" << std::endl;
+                      << " [--fps XX] [--qvga]" << std::endl;
+            return 64 /* EX_USAGE */;
         }
     }
 
@@ -180,25 +179,8 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (mode_test)
-    {
-        int rates_qvga[] = { 2,  3,  5,  7,  10, 12,  15,  17,  30,  37,
-                             40, 50, 60, 75, 90, 100, 125, 137, 150, 187 };
-        int num_rates_qvga = sizeof(rates_qvga) / sizeof(int);
-
-        int rates_vga[] = { 2, 3, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75 };
-        int num_rates_vga = sizeof(rates_vga) / sizeof(int);
-
-        for (int index = 0; index < num_rates_qvga; ++index)
-            run_camera(320, 240, rates_qvga[index], 5);
-
-        for (int index = 0; index < num_rates_vga; ++index)
-            run_camera(640, 480, rates_vga[index], 5);
-    }
-    else
-    {
-        run_camera(width, height, fps, 0);
-    }
+    run_camera(res, fps, 0);
 
     return EXIT_SUCCESS;
 }
+

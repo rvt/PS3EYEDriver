@@ -36,4 +36,7 @@ if(libusb_FOUND)
     )
 endif()
 
+add_executable(ps3eye-mode-test "mode-test.cxx")
+target_link_libraries(ps3eye-mode-test ps3eye-driver)
+
 add_subdirectory("sdl")

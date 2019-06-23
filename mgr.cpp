@@ -9,6 +9,8 @@
 
 namespace ps3eye::detail {
 
+extern volatile bool _ps3eye_debug;
+
 enum {
     vendor_id = 0x1415,
     product_id = 0x2000,

@@ -284,11 +284,10 @@ bool camera::start()
 
     ov534_set_frame_rate(framerate_);
 
-
     set_hue(hue_);
     set_saturation(saturation_);
-    set_auto_gain(auto_gain_);
     set_awb(awb_);
+    set_auto_gain(auto_gain_);
     set_gain(gain_);
     set_exposure(exposure_);
     set_brightness(brightness_);

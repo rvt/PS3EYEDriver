@@ -2,7 +2,6 @@
 #pragma once
 
 #include "urb.hpp"
-#include "internal.hpp"
 #include "setter.hpp"
 
 #include <vector>
@@ -21,6 +20,7 @@ struct rate_s
     uint8_t r0d;
     uint8_t re5;
 };
+extern volatile bool _ps3eye_debug;
 } // ns ps3eye::detail
 
 namespace ps3eye {
@@ -62,7 +62,7 @@ struct camera
     void set_contrast(int val);
     constexpr uint8_t brightness() const { return brightness_; }
     void set_brightness(int val);
-    constexpr int8_t hue() const { return hue_; }
+    constexpr uint8_t hue() const { return hue_; }
     void set_hue(int val);
     constexpr uint8_t red_balance() const { return red_balance_; }
     void set_red_balance(int val);
@@ -147,7 +147,7 @@ private:
     val<> green_balance_ = 128;
     val<> saturation_ = 0;
 
-    bool auto_gain_ = true;
+    bool auto_gain_ = false;
     bool awb_ = true;
     bool flip_h_ = false;
     bool flip_v_ = false;

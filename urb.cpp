@@ -112,15 +112,15 @@ bool urb_descriptor::start_transfers(libusb_device_handle* handle, uint32_t fram
     memset(transfer_buffer.data(), 0, transfer_size * num_transfers);
 
     int res = 0;
-    for (int index = 0; index < num_transfers; ++index)
+    for (unsigned i = 0; i < num_transfers; ++i)
     {
         // Create & submit the transfer
-        xfr[index] = libusb_alloc_transfer(0);
-        libusb_fill_bulk_transfer(xfr[index], handle, bulk_endpoint,
-                                  transfer_buffer.data() + index * transfer_size, transfer_size, transfer_completed_callback,
+        xfr[i] = libusb_alloc_transfer(0);
+        libusb_fill_bulk_transfer(xfr[i], handle, bulk_endpoint,
+                                  transfer_buffer.data() + i * transfer_size, transfer_size, transfer_completed_callback,
                                   reinterpret_cast<void*>(this), 0);
 
-        res |= libusb_submit_transfer(xfr[index]);
+        res |= libusb_submit_transfer(xfr[i]);
 
         num_active_transfers++;
     }

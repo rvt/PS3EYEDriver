@@ -274,8 +274,7 @@ void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, 
         {
             dest[-1 * swap_br] = source[source_stride + 1];
             dest[0] = (source[1] + source[source_stride] + source[source_stride + 2] +
-                       source[source_stride * 2 + 1] + 2) >>
-                                                          2;
+                       source[source_stride * 2 + 1] + 2) >> 2;
             dest[1 * swap_br] = (source[0] + source[2] + source[source_stride * 2] +
                                  source[source_stride * 2 + 2] + 2) >> 2;
 

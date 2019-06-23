@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ps3eye.hpp"
+
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -7,10 +9,6 @@
 struct libusb_context;
 struct libusb_device;
 struct libusb_device_handle;
-
-namespace ps3eye {
-struct camera;
-} // ns ps3eye
 
 namespace ps3eye::detail {
 

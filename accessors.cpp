@@ -9,14 +9,15 @@ namespace ps3eye {
 void camera::set_auto_gain(bool val)
 {
     auto_gain_ = val;
+    constexpr int mask = 1 << 0 /* AEC */ | 1 << 2 /* AGC */;
     if (val)
     {
-        sccb_reg_write(0x13, sccb_reg_read(0x13) | 0x04);
+        sccb_reg_write(0x13, sccb_reg_read(0x13) | mask);
         sccb_reg_write(0x64, sccb_reg_read(0x64) | 0x03);
     }
     else
     {
-        sccb_reg_write(0x13, sccb_reg_read(0x13) & ~0x04);
+        sccb_reg_write(0x13, sccb_reg_read(0x13) & ~mask);
         sccb_reg_write(0x64, sccb_reg_read(0x64) & ~0x03);
 
         set_gain(gain_);

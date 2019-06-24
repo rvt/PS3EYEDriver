@@ -38,6 +38,10 @@ void camera::set_awb(bool val)
     {
         sccb_reg_write(0x13, sccb_reg_read(0x13) & ~0x02);
         sccb_reg_write(0x63, sccb_reg_read(0x63) & ~0xc0);
+
+        set_red_balance(red_balance_);
+        set_green_balance(green_balance_);
+        set_blue_balance(blue_balance_);
     }
 }
 

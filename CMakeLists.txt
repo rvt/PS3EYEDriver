@@ -36,9 +36,6 @@ if(libusb_FOUND)
     )
 endif()
 
-add_executable(ps3eye-mode-test "mode-test.cxx")
-target_link_libraries(ps3eye-mode-test ps3eye-driver)
-
 if(TARGET ps3eye-driver)
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
     find_package(SDL2 QUIET)
@@ -49,5 +46,8 @@ if(TARGET ps3eye-driver)
         link_libraries(ps3eye-driver)
         add_executable(ps3eye-sdl "sdl.cxx")
     endif()
+
+    add_executable(ps3eye-mode-test "mode-test.cxx")
+    target_link_libraries(ps3eye-mode-test ps3eye-driver)
 endif()
 

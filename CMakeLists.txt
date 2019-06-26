@@ -4,6 +4,8 @@ add_definitions(-DNOMINMAX)
 add_definitions(-DWIN32_LEAN_AND_MEAN)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
+add_definitions(-DPS3EYE_DEBUG)
+
 if(NOT WIN32)
     add_definitions(-pthread)
     link_libraries(-pthread)

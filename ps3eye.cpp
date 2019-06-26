@@ -37,7 +37,7 @@ enum : uint8_t {
 using namespace std::chrono_literals;
 
 namespace ps3eye::detail {
-volatile bool _ps3eye_debug = true;
+volatile bool _ps3eye_debug_status = true;
 } // ns ps3eye::detail
 
 using ps3eye::detail::ps3eye_debug;
@@ -212,14 +212,27 @@ camera::~camera()
 void camera::release()
 {
     if (handle_)
+    {
+        stop();
         close_usb();
+    }
     handle_ = nullptr;
-    error_code_ = NO_ERROR;
+    set_error(NO_ERROR);
+}
+
+void camera::set_error(int code)
+{
+    if (code == NO_ERROR || error_code_ == NO_ERROR)
+    {
+        error_code_ = code;
+        if (code != NO_ERROR)
+            ps3eye_debug("usb error %s (%d)\n", error_string(), code);
+    }
 }
 
 bool camera::init(resolution res, int framerate, format fmt)
 {
-    error_code_ = NO_ERROR;
+    set_error(NO_ERROR);
     stop();
     if (error_code_ != NO_ERROR)
         release();
@@ -401,7 +414,7 @@ bool camera::open_usb()
     if (res != 0)
     {
         ps3eye_debug("device open error: %d\n", res);
-        error_code_ = res;
+        set_error(res);
         return false;
     }
 
@@ -416,7 +429,7 @@ bool camera::open_usb()
     if (res != 0)
     {
         ps3eye_debug("device claim interface error: %d\n", res);
-        error_code_ = res;
+        set_error(res);
         return false;
     }
 
@@ -639,6 +652,8 @@ void camera::reg_w_array(const uint8_t (*data)[2], int len)
 {
     while (--len >= 0)
     {
+        if (error_code_ != NO_ERROR)
+            break;
         ov534_reg_write((*data)[0], (*data)[1]);
         data++;
     }
@@ -662,7 +677,7 @@ void camera::sccb_w_array(const uint8_t (*data)[2], int len)
     }
 }
 
-const char* camera::error_message() const
+const char* camera::error_string() const
 {
     if (error_code_ == NO_ERROR)
         return nullptr;

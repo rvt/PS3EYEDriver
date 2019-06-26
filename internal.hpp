@@ -6,13 +6,13 @@
 
 namespace ps3eye::detail {
 
-extern volatile bool _ps3eye_debug;
+extern volatile bool _ps3eye_debug_status;
 
 #ifdef PS3EYE_DEBUG
 template<unsigned N, typename... xs>
 inline void ps3eye_debug(const char(&fmt)[N], const xs&... args)
 {
-    if (_ps3eye_debug)
+    if (_ps3eye_debug_status)
         fprintf(stderr, fmt, args...);
 }
 #else

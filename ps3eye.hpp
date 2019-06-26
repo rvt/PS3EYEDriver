@@ -20,7 +20,7 @@ struct rate_s
     uint8_t r0d;
     uint8_t re5;
 };
-extern volatile bool _ps3eye_debug;
+extern volatile bool _ps3eye_debug_status;
 } // ns ps3eye::detail
 
 namespace ps3eye {
@@ -75,12 +75,12 @@ struct camera
     constexpr bool test_pattern_status() const { return test_pattern_; }
     void set_test_pattern_status(bool enable);
     constexpr int framerate() const { return framerate_; }
-    bool set_framerate(int val);
+    void set_framerate(int val);
     constexpr int saturation() const { return saturation_; }
     void set_saturation(int val);
 
     constexpr bool is_open() const { return streaming_; }
-    constexpr bool is_initialized() const { return device_ && handle_ && size() != std::pair<int,int>(); }
+    constexpr bool is_initialized() const { return device_ && handle_; }
 
     constexpr libusb_device* device() const { return device_; }
     [[nodiscard]] bool usb_port(char* buf, unsigned sz) const;
@@ -102,13 +102,13 @@ struct camera
     void operator=(const camera&) = delete;
 
     static void set_debug(bool value);
-    static bool is_debugging() { return ps3eye::detail::_ps3eye_debug; }
+    static bool is_debugging() { return ps3eye::detail::_ps3eye_debug_status; }
 
     static int normalize_framerate(int fps, resolution res);
     int normalize_framerate(int fps);
 
     constexpr int error_code() const { return error_code_; }
-    const char* error_message() const;
+    const char* error_string() const;
 
     static constexpr int NO_ERROR = 0;
 
@@ -129,6 +129,8 @@ private:
     uint8_t sccb_reg_read(uint16_t reg);
     void reg_w_array(const uint8_t (*data)[2], int len);
     void sccb_w_array(const uint8_t (*data)[2], int len);
+
+    void set_error(int code);
 
     int error_code_ = NO_ERROR;
 
@@ -157,8 +159,8 @@ private:
     //static bool enumerated;
     //static std::vector<std::shared_ptr<camera>> devices;
 
-    resolution resolution_;
-    int framerate_ = 0;
+    resolution resolution_ = res_VGA;
+    int framerate_ = 30;
     format format_ = format::BGR;
 
     // usb stuff

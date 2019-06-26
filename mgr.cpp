@@ -9,7 +9,7 @@
 
 namespace ps3eye::detail {
 
-extern volatile bool _ps3eye_debug;
+extern volatile bool _ps3eye_debug_status;
 
 enum {
     vendor_id = 0x1415,
@@ -21,7 +21,7 @@ usb_manager::usb_manager()
     libusb_init(&usb_context);
     libusb_set_option(usb_context,
                       LIBUSB_OPTION_LOG_LEVEL,
-                      _ps3eye_debug ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE);
+                      _ps3eye_debug_status ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE);
 }
 
 usb_manager::~usb_manager()
@@ -116,10 +116,10 @@ std::vector<std::shared_ptr<camera>> usb_manager::list_devices()
 }
 void usb_manager::set_debug(bool value)
 {
-    if (value == _ps3eye_debug)
+    if (value == _ps3eye_debug_status)
         return;
 
-    _ps3eye_debug = value;
+    _ps3eye_debug_status = value;
     libusb_set_option(usb_context,
                       LIBUSB_OPTION_LOG_LEVEL,
                       value ? LIBUSB_LOG_LEVEL_INFO : LIBUSB_LOG_LEVEL_NONE);

@@ -49,7 +49,7 @@ static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
     printf("[%s] %dx%d@%dHz\n", ret ? "GOOD" : "FAIL", cam.width(), cam.height(), cam.framerate());
 
     return ret;
-};
+}
 
 static bool iter_modes(ps3eye::camera& cam, ps3eye::resolution res)
 {

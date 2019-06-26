@@ -51,12 +51,23 @@ static bool test(ps3eye::camera& cam, int fps, ps3eye::resolution res)
     return ret;
 };
 
+static bool iter_modes(ps3eye::camera& cam, ps3eye::resolution res)
+{
+    int last_fps = -1;
+    bool status = true;
+    for (int x = 0; x < 256; x++)
+    {
+        int fps = ps3eye::camera::normalize_framerate(x, res);
+        if (fps == last_fps)
+            continue;
+        last_fps = fps;
+        status &= test(cam, fps, res);
+    }
+    return status;
+}
+
 int main(void)
 {
-    static const int rates_qvga[] = { 2,  3,  5,  7,  10, 12,  15,  17,  30,  37,
-                                      40, 50, 60, 75, 90, 100, 125, 137, 150, 187 };
-    static const int rates_svga[] = { 2, 3, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 83 };
-
     ps3eye::camera::set_debug(true);
     auto devices = ps3eye::list_devices();
     constexpr int ex_NOINPUT = 66 /* sysexits(3) */;
@@ -70,23 +81,8 @@ int main(void)
     auto cam = devices[0];
     bool status = true;
 
-    for (unsigned i = 0, last_fps = 0; i < std::size(rates_qvga); ++i)
-    {
-        auto fps = (unsigned)ps3eye::camera::normalize_framerate(rates_qvga[i], ps3eye::res_QVGA);
-        if (fps == last_fps)
-            continue;
-        last_fps = fps;
-        status &= test(*cam, rates_qvga[i], ps3eye::res_QVGA);
-    }
-
-    for (unsigned i = 0, last_fps = 0; i < std::size(rates_svga); ++i)
-    {
-        auto fps = (unsigned)ps3eye::camera::normalize_framerate(rates_qvga[i], ps3eye::res_VGA);
-        if (fps == last_fps)
-            continue;
-        last_fps = fps;
-        status &= test(*cam, rates_qvga[i], ps3eye::res_VGA);
-    }
+    status &= iter_modes(*cam, ps3eye::res_QVGA);
+    status &= iter_modes(*cam, ps3eye::res_VGA);
 
     ps3eye::camera::set_debug(false);
 

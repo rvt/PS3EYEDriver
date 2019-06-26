@@ -2,7 +2,8 @@
 #include "mgr.hpp"
 
 using ps3eye::detail::usb_manager;
-using ps3eye::detail::_ps3eye_debug;
+using ps3eye::detail::_ps3eye_debug_status;
+using ps3eye::detail::ps3eye_debug;
 
 namespace ps3eye {
 
@@ -45,12 +46,12 @@ void camera::set_awb(bool val)
     }
 }
 
-bool camera::set_framerate(int val)
+void camera::set_framerate(int val)
 {
-    if (streaming_)
-        return false;
-    framerate_ = ov534_set_frame_rate(val, true);
-    return true;
+    if (!streaming_)
+        framerate_ = normalize_framerate(val);
+    else
+        ps3eye_debug("Can't change framerate while streaming\n");
 }
 
 void camera::set_test_pattern_status(bool enable)
@@ -158,7 +159,7 @@ void camera::set_saturation(int val)
 void camera::set_debug(bool value)
 {
     usb_manager::instance().set_debug(value);
-    _ps3eye_debug = value;
+    _ps3eye_debug_status = value;
 }
 
 std::pair<int, int> camera::size() const

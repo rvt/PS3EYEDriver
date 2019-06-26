@@ -113,7 +113,7 @@ struct camera
     static constexpr int NO_ERROR = 0;
 
 private:
-    static ps3eye::detail::rate_s _normalize_framerate(int fps, resolution res);
+    static const ps3eye::detail::rate_s& _normalize_framerate(int fps, resolution res);
 
     void release();
     [[nodiscard]] bool open_usb();

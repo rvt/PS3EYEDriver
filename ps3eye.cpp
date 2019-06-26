@@ -477,7 +477,7 @@ int camera::normalize_framerate(int fps, resolution res)
     return _normalize_framerate(fps, res).fps;
 }
 
-rate_s camera::_normalize_framerate(int fps, resolution res)
+const rate_s& camera::_normalize_framerate(int fps, resolution res)
 {
     static const struct rate_s rate_0[] = {
         /* 640x480 */
@@ -541,7 +541,7 @@ int camera::normalize_framerate(int fps)
 /* validate frame rate and (if not dry run) set it */
 int camera::ov534_set_frame_rate(int frame_rate, bool dry_run)
 {
-    const struct rate_s rate = _normalize_framerate(frame_rate, resolution_);
+    const struct rate_s& rate = _normalize_framerate(frame_rate, resolution_);
 
     if (!dry_run)
     {

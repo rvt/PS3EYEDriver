@@ -9,13 +9,17 @@ namespace ps3eye::detail {
 extern volatile bool _ps3eye_debug;
 
 #ifdef PS3EYE_DEBUG
-template<typename... xs> inline void ps3eye_debug(const xs&... args)
+template<unsigned N, typename... xs>
+inline void ps3eye_debug(const char(&fmt)[N], const xs&... args)
 {
     if (_ps3eye_debug)
-        fprintf(stderr, args...);
+        fprintf(stderr, fmt, args...);
 }
 #else
-template<typename... xs> inline void ps3eye_debug(const xs&...) {}
+template<unsigned N, typename... xs>
+inline void ps3eye_debug(const char(&)[N], const xs&... args)
+{
+}
 #endif
 
 } // ns ps3eye::detail

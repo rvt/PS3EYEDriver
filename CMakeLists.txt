@@ -51,5 +51,7 @@ if(TARGET ps3eye-driver)
 
     add_executable(ps3eye-mode-test "mode-test.cxx")
     target_link_libraries(ps3eye-mode-test ps3eye-driver)
-endif()
 
+    add_executable(ps3eye-frame-test "frame-test.cxx")
+    target_link_libraries(ps3eye-frame-test ps3eye-driver)
+endif()

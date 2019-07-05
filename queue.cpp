@@ -322,12 +322,23 @@ bool frame_queue::dequeue(uint8_t* dest, int W, int H, format fmt)
     // Copy from internal buffer
     uint8_t* source = buffer_.data() + size_ * tail_;
 
-    if (fmt == format::Bayer)
+    switch (fmt)
+    {
+    case format::Bayer:
         memcpy(dest, source, size_);
-    else if (fmt == format::BGR || fmt == format::RGB)
+        break;
+    case format::BGR:
+    case format::RGB:
         debayer_rgb(W, H, source, dest, fmt == format::BGR);
-    else if (fmt == format::Gray)
+        break;
+    case format::Gray:
         debayer_gray(W, H, source, dest);
+        break;
+    default:
+        ps3eye_debug("invalid format %d in dequeue()\n", (int)fmt);
+        break;
+    }
+
     // Update tail and available count
     tail_ = (tail_ + 1) % max_buffered_frames;
     available_--;

@@ -402,8 +402,14 @@ bool camera::get_frame(uint8_t* frame)
     if (!streaming_)
         return false;
 
+    if (error_code_ != NO_ERROR && handle_)
+    {
+        stop();
+        release();
+        return false;
+    }
+
     auto [ w, h ] = size();
-    using namespace std::chrono_literals;
     return urb.queue.dequeue(frame, w, h, format_);
 }
 

@@ -45,7 +45,7 @@ uint8_t* frame_queue::enqueue()
     // update head and available count to signal to the consumer that a new
     // frame is available
     head_ = (head_ + 1) % max_buffered_frames;
-    available_++;
+    available_ = std::min(available_ + 1, max_buffered_frames);
 
     // Determine the next frame pointer that the producer should write to
     new_frame = buffer_.data() + head_ * size_;
@@ -56,7 +56,7 @@ uint8_t* frame_queue::enqueue()
     return new_frame;
 }
 
-void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
+static void debayer_gray(int W, int H, const uint8_t* __restrict input, uint8_t* __restrict buf)
 {
     // PSMove output is in the following Bayer format (GRBG):
     //
@@ -176,7 +176,8 @@ void frame_queue::debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf)
     }
 }
 
-void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, bool inBGR)
+template<bool in_BGR, int swap_br = in_BGR ? 1 : -1>
+static void debayer_rgb(int W, int H, const uint8_t* __restrict input, uint8_t* __restrict buf)
 {
     // PSMove output is in the following Bayer format (GRBG):
     //
@@ -194,7 +195,6 @@ void frame_queue::debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, 
     // We start outputting at the second pixel of the
     uint8_t* dest_row = buf + dest_stride + num_output_channels + 1;
     // second row's G component
-    int swap_br = inBGR ? 1 : -1;
 
     // Fill rows 1 to height-2 of the destination buffer. First and last row
     // are filled separately (they are copied from the second row and
@@ -328,8 +328,10 @@ bool frame_queue::dequeue(uint8_t* dest, int W, int H, format fmt)
         memcpy(dest, source, size_);
         break;
     case format::BGR:
+        debayer_rgb<true>(W, H, source, dest);
+        break;
     case format::RGB:
-        debayer_rgb(W, H, source, dest, fmt == format::BGR);
+        debayer_rgb<false>(W, H, source, dest);
         break;
     case format::Gray:
         debayer_gray(W, H, source, dest);

@@ -9,12 +9,24 @@ namespace ps3eye::detail {
 extern volatile bool _ps3eye_debug_status;
 
 #ifdef PS3EYE_DEBUG
+
+#ifdef __GNUG__
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wformat-security"
+#   pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+
 template<unsigned N, typename... xs>
 inline void ps3eye_debug(const char(&fmt)[N], const xs&... args)
 {
     if (_ps3eye_debug_status)
         fprintf(stderr, fmt, args...);
 }
+
+#ifdef __GNUG__
+#   pragma GCC diagnostic pop
+#endif
+
 #else
 template<unsigned N, typename... xs>
 inline void ps3eye_debug(const char(&)[N], const xs&... args)

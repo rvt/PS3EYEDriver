@@ -15,6 +15,10 @@
 #include <iterator>
 #include <chrono>
 
+#ifdef __clang__
+#   pragma clang diagnostic ignored "-Wzero-length-array"
+#endif
+
 #ifdef _MSC_VER
 #   pragma warning(disable : 4200) // zero-length arrays
 #   pragma warning(disable : 4996) // 'This function or variable may be unsafe': snprintf

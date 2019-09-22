@@ -22,9 +22,6 @@ struct frame_queue final
     [[nodiscard]]
     bool dequeue(uint8_t* dest, int W, int H, format fmt);
 
-    static void debayer_gray(int W, int H, const uint8_t* input, uint8_t* buf);
-    static void debayer_rgb(int W, int H, const uint8_t* input, uint8_t* buf, bool inBGR);
-
 private:
     static constexpr unsigned max_frame_size = 640*480;
     static constexpr unsigned max_buffered_frames = 5;

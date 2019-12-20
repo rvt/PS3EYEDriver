@@ -1,34 +1,27 @@
 set(CMAKE_CXX_VISIBILITY_PRESET "hidden")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/")
 
 add_definitions(-DNOMINMAX)
-add_definitions(-DWIN32_LEAN_AND_MEAN)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-
 add_definitions(-DPS3EYE_DEBUG)
 
-if(NOT WIN32)
-    add_definitions(-pthread)
-    link_libraries(-pthread)
-endif()
-
-if(NOT MSVC)
-    if(PKG_CONFIG_FOUND)
-        pkg_check_modules(libusb "libusb-1.0" QUIET)
-    endif()
-    if(libusb_FOUND)
-        include_directories(SYSTEM ${libusb_INCLUDE_DIRS})
-        link_libraries(${libusb_LIBRARIES})
-    endif()
-else()
+if(WIN32)
+    add_definitions(-DWIN32_LEAN_AND_MEAN)
     set(SDK_LIBUSB CACHE PATH "")
     if(SDK_LIBUSB)
         set(libusb_FOUND TRUE)
         link_directories("${SDK_LIBUSB}")
         include_directories(SYSTEM "${SDK_LIBUSB}")
     endif()
+else()
+    add_definitions(-pthread)
+    find_package(LibUSB REQUIRED)
+    include_directories(SYSTEM ${LibUSB_INCLUDE_DIRS})
+    # /usr/local/Cellar/libusb/1.0.23/include/libusb-1.0 : /usr/local/Cellar/libusb/1.0.23/lib/libusb-1.0.dylib
+    link_libraries(${LibUSB_LIBRARIES} -pthread)
 endif()
 
-if(libusb_FOUND)
+if(libusb_FOUND OR LibUSB_FOUND)
     add_library(ps3eye-driver STATIC
         "ps3eye.cpp"
         "urb.cpp"
